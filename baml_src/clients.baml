@@ -1,25 +1,17 @@
-client<llm> Gemini2_5_flash {
+// Gemini 3 clients (v1 choice — model swaps are a config change)
+client<llm> Gemini3Flash {
   provider google-ai
   options {
-    model gemini-2.5-flash-preview-04-17
+    model gemini-3-flash-preview
     api_key env.GEMINI_API_KEY
   }
 }
 
-client<llm> Gemini2_5_pro {
+client<llm> Gemini3Pro {
   provider google-ai
   options {
-    model gemini-2.5-pro-exp-03-25
+    model gemini-3.1-pro-preview
     api_key env.GEMINI_API_KEY
-  }
-}
-
-client<llm> DeepSeekR1 {
-  provider "openai"
-  options {
-    api_key env.DEEPSEEK_API_KEY
-    base_url "https://api.deepseek.com"
-    model "deepseek-reasoner"
   }
 }
 
@@ -37,15 +29,14 @@ client<llm> DeepSeekV3 {
 client<llm> LLMFallback {
   provider fallback
   options {
-    // This will try the clients in order until one succeeds
-    strategy [DeepSeekV3, Gemini2_5_flash]
+    // Gemini 3 Flash first, DeepSeek V3 as fallback
+    strategy [Gemini3Flash, DeepSeekV3]
   }
 }
 
 // https://docs.boundaryml.com/docs/snippets/clients/retry
 retry_policy Constant {
   max_retries 3
-  // Strategy is optional
   strategy {
     type constant_delay
     delay_ms 200
@@ -54,7 +45,6 @@ retry_policy Constant {
 
 retry_policy Exponential {
   max_retries 2
-  // Strategy is optional
   strategy {
     type exponential_backoff
     delay_ms 300
