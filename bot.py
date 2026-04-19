@@ -41,12 +41,16 @@ ptb_app: Optional[Application] = None
 
 def _register_handlers(app: Application) -> None:
     """Register all handlers on a PTB Application. Single source of truth."""
-    app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(CommandHandler("start", start_handler, filters=filters.ChatType.PRIVATE))
+    # Capture ALL group text messages — including commands — so the full
+    # conversation history is stored for catchup/search. group=1 ensures
+    # this runs alongside (not instead of) any future group CommandHandlers.
     app.add_handler(
         MessageHandler(
-            filters.TEXT & (~filters.COMMAND) & filters.ChatType.GROUPS,
+            filters.TEXT & filters.ChatType.GROUPS,
             group_message_handler,
-        )
+        ),
+        group=1,
     )
 
 
@@ -88,15 +92,21 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     db.upsert_user(tg_user_id, username)
     db.ensure_user_chat_state(tg_user_id, tg_chat_id)
 
-    # If message has links and was stored (not a duplicate), run agent pipeline
-    if has_links and message_id:
+    # If message has links, run agent pipeline regardless of DB write outcome.
+    # message_id may be None on duplicate or transient DB failure — link processing
+    # should still proceed since run_agent() is independent of persistence.
+    if has_links:
         await _process_links_and_store(message, text, urls, message_id)
 
 
 async def _process_links_and_store(
-    message, text: str, urls: list[str], message_id: int
+    message, text: str, urls: list[str], message_id: Optional[int]
 ) -> None:
-    """Run agent pipeline on link message, reply with summary, store in link_summaries."""
+    """Run agent pipeline on link message, reply with summary, store in link_summaries.
+
+    message_id may be None if store_message failed — agent still runs and replies,
+    but link summary is not persisted to DB without a parent message row.
+    """
     try:
         agent_result = await run_agent(text)
 
@@ -108,13 +118,15 @@ async def _process_links_and_store(
             if lines and lines[0].startswith("#"):
                 title = lines[0].lstrip("#").strip()
 
-            db.store_link_summary(
-                message_id=message_id,
-                url=url,
-                link_type=_detect_link_type(url),
-                title=title,
-                summary=agent_result,
-            )
+            # Only persist to DB if we have a valid parent message row
+            if message_id:
+                db.store_link_summary(
+                    message_id=message_id,
+                    url=url,
+                    link_type=_detect_link_type(url),
+                    title=title,
+                    summary=agent_result,
+                )
 
             # Reply in group — escape per chunk to avoid splitting HTML entities
             for i in range(0, len(agent_result), MAX_TELEGRAM_MSG_LEN):

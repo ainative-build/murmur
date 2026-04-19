@@ -201,8 +201,12 @@ class TestGroupMessageHandler:
                         mock_process.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_handler_skips_agent_on_duplicate(self):
-        """Handler should not call agent if message was a duplicate."""
+    async def test_handler_runs_agent_even_on_db_failure(self):
+        """Agent pipeline runs even if store_message returns None (duplicate or DB error).
+
+        Link summarization is independent of persistence — transient Supabase failure
+        should not suppress the group reply.
+        """
         mock_user = Mock()
         mock_user.id = 789
 
@@ -224,12 +228,13 @@ class TestGroupMessageHandler:
             with patch('bot.db.upsert_user'):
                 with patch('bot.db.ensure_user_chat_state'):
                     with patch('bot._process_links_and_store', new_callable=AsyncMock) as mock_process:
-                        mock_store_msg.return_value = None  # None means duplicate
+                        mock_store_msg.return_value = None  # DB failure or duplicate
 
                         await bot.group_message_handler(mock_update, mock_context)
 
-                        # Verify process_links was NOT called
-                        mock_process.assert_not_called()
+                        # Agent pipeline still called with message_id=None
+                        mock_process.assert_called_once()
+                        assert mock_process.call_args[0][3] is None
 
     @pytest.mark.asyncio
     async def test_handler_skips_agent_if_no_links(self):
