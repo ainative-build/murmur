@@ -236,6 +236,25 @@ def get_twitter_content(state: AgentState) -> Dict[str, Any]:
             if not isinstance(content_result, str):
                 content_result = str(content_result)
 
+            # If tweet is mostly a link with little text, follow the embedded URL
+            import re as _re
+            embedded_urls = _re.findall(r'https?://t\.co/\S+|https?://(?!x\.com|twitter\.com)\S+', content_result)
+            tweet_text_only = _re.sub(r'https?://\S+', '', content_result).strip()
+            if embedded_urls and len(tweet_text_only) < 100:
+                console.print(f"Tweet is mostly a link — extracting linked content: {embedded_urls[0]}", style="cyan")
+                try:
+                    link_content = run_tavily_tool(mode="extract", urls=[embedded_urls[0]])
+                    results_list = link_content.get("results", []) if isinstance(link_content, dict) else []
+                    if results_list:
+                        raw = results_list[0].get("raw_content") or results_list[0].get("content", "")
+                        if isinstance(raw, dict):
+                            raw = raw.get("text", str(raw))
+                        if raw and len(raw) > 100:
+                            content_result = f"Tweet by {content_result}\n\n--- Linked Content ---\n{raw[:10000]}"
+                            console.print(f"Extracted {len(raw)} chars from linked URL", style="green")
+                except Exception as link_err:
+                    console.print(f"Could not extract linked content: {link_err}", style="yellow")
+
     except Exception as e:
         console.print(
             f"Unexpected error calling fetch_tweet_thread for {url}: {e}",
