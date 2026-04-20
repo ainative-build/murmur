@@ -16,13 +16,22 @@ from fastapi import FastAPI, Request, Response, HTTPException, Header
 import uvicorn
 
 from telegram import Update
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
+from telegram.ext import (
+    Application, MessageHandler, CommandHandler, ConversationHandler,
+    filters, ContextTypes,
+)
 from telegram.constants import ParseMode
 
 import config
 import db
 from agent import run_agent
-from commands import start_handler
+from commands import (
+    start_handler, catchup_handler, search_handler,
+    note_handler, sources_handler, delete_handler, dm_message_handler,
+    topics_handler, topic_handler, decide_handler,
+    remind_handler, export_handler, kb_handler,
+)
+from draft_mode import draft_start_handler, draft_continue_handler, draft_end_handler, draft_cancel_handler, DRAFTING
 
 # --- Logging ---
 logging.basicConfig(
@@ -41,10 +50,44 @@ ptb_app: Optional[Application] = None
 
 def _register_handlers(app: Application) -> None:
     """Register all handlers on a PTB Application. Single source of truth."""
-    app.add_handler(CommandHandler("start", start_handler, filters=filters.ChatType.PRIVATE))
-    # Capture ALL group text messages — including commands — so the full
-    # conversation history is stored for catchup/search. group=1 ensures
-    # this runs alongside (not instead of) any future group CommandHandlers.
+    # DM commands (private chat only)
+    private = filters.ChatType.PRIVATE
+    app.add_handler(CommandHandler("start", start_handler, filters=private))
+    app.add_handler(CommandHandler("catchup", catchup_handler, filters=private))
+    app.add_handler(CommandHandler("search", search_handler, filters=private))
+    app.add_handler(CommandHandler("note", note_handler, filters=private))
+    app.add_handler(CommandHandler("sources", sources_handler, filters=private))
+    app.add_handler(CommandHandler("delete", delete_handler, filters=private))
+    app.add_handler(CommandHandler("topics", topics_handler, filters=private))
+    app.add_handler(CommandHandler("topic", topic_handler, filters=private))
+    app.add_handler(CommandHandler("decide", decide_handler, filters=private))
+    app.add_handler(CommandHandler("remind", remind_handler, filters=private))
+    app.add_handler(CommandHandler("export", export_handler, filters=private))
+    app.add_handler(CommandHandler("kb", kb_handler, filters=private))
+
+    # Draft mode — ConversationHandler for multi-turn /draft in DM
+    draft_handler = ConversationHandler(
+        entry_points=[CommandHandler("draft", draft_start_handler, filters=private)],
+        states={
+            DRAFTING: [MessageHandler(filters.TEXT & (~filters.COMMAND), draft_continue_handler)],
+        },
+        fallbacks=[
+            CommandHandler("done", draft_end_handler),
+            CommandHandler("cancel", draft_cancel_handler),
+        ],
+        per_user=True,
+        per_chat=True,
+    )
+    app.add_handler(draft_handler)
+
+    # DM non-command messages — links, forwards, plain text
+    app.add_handler(MessageHandler(
+        filters.TEXT & (~filters.COMMAND) & private,
+        dm_message_handler,
+    ))
+
+    # Group messages: capture ALL text (including commands) for history.
+    # group=1 runs alongside command handlers in group 0.
     app.add_handler(
         MessageHandler(
             filters.TEXT & filters.ChatType.GROUPS,
@@ -69,11 +112,9 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     tg_msg_id = message.message_id
     timestamp = message.date or datetime.now(timezone.utc)
 
-    # Check for links
     urls = re.findall(URL_REGEX, text)
     has_links = len(urls) > 0
 
-    # Store message in Supabase
     message_id = db.store_message(
         tg_msg_id=tg_msg_id,
         tg_chat_id=tg_chat_id,
@@ -88,13 +129,9 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
         ) else None,
     )
 
-    # Ensure user + user_chat_state records exist
     db.upsert_user(tg_user_id, username)
     db.ensure_user_chat_state(tg_user_id, tg_chat_id)
 
-    # If message has links, run agent pipeline regardless of DB write outcome.
-    # message_id may be None on duplicate or transient DB failure — link processing
-    # should still proceed since run_agent() is independent of persistence.
     if has_links:
         await _process_links_and_store(message, text, urls, message_id)
 
@@ -102,23 +139,17 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
 async def _process_links_and_store(
     message, text: str, urls: list[str], message_id: Optional[int]
 ) -> None:
-    """Run agent pipeline on link message, reply with summary, store in link_summaries.
-
-    message_id may be None if store_message failed — agent still runs and replies,
-    but link summary is not persisted to DB without a parent message row.
-    """
+    """Run agent pipeline on link message, reply with summary, store in link_summaries."""
     try:
         agent_result = await run_agent(text)
 
         if isinstance(agent_result, str) and not agent_result.startswith("Error:"):
-            url = urls[0]  # Agent processes first URL in message
-            # Extract title from agent result (first line is often "# Title")
+            url = urls[0]
             title = None
             lines = agent_result.strip().split("\n")
             if lines and lines[0].startswith("#"):
                 title = lines[0].lstrip("#").strip()
 
-            # Only persist to DB if we have a valid parent message row
             if message_id:
                 db.store_link_summary(
                     message_id=message_id,
@@ -128,7 +159,6 @@ async def _process_links_and_store(
                     summary=agent_result,
                 )
 
-            # Reply in group — escape per chunk to avoid splitting HTML entities
             for i in range(0, len(agent_result), MAX_TELEGRAM_MSG_LEN):
                 raw_chunk = agent_result[i:i + MAX_TELEGRAM_MSG_LEN]
                 try:
@@ -165,7 +195,7 @@ def _detect_link_type(url: str) -> str:
 
 
 async def _safe_process_update(update: Update) -> None:
-    """Process a Telegram update with error logging (prevents silent task failures)."""
+    """Process a Telegram update with error logging."""
     try:
         await ptb_app.process_update(update)
     except Exception as e:
@@ -183,13 +213,11 @@ async def lifespan(app: FastAPI):
         logger.critical("TELEGRAM_BOT_TOKEN not set. Cannot start.")
         raise RuntimeError("TELEGRAM_BOT_TOKEN required")
 
-    # Build PTB app here (not at import time) to avoid crashes in tests/scripts
     ptb_app = Application.builder().token(config.BOT_TOKEN).build()
     await ptb_app.initialize()
     _register_handlers(ptb_app)
     await ptb_app.start()
 
-    # Polling or webhook mode
     polling_task = None
     if config.USE_POLLING:
         logger.info("Starting polling mode...")
@@ -215,7 +243,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # --- Shutdown ---
     logger.info("Application shutdown...")
     try:
         if polling_task and not polling_task.done():
@@ -264,6 +291,18 @@ async def webhook(
     except Exception as e:
         logger.error(f"Webhook error: {e}", exc_info=True)
         return {"ok": False, "error": "Internal error"}
+
+
+@app.post("/api/check-reminders")
+async def check_reminders_endpoint():
+    """Called by Cloud Scheduler to trigger reminder checks."""
+    try:
+        from reminders import check_and_send_reminders
+        count = await check_and_send_reminders(ptb_app.bot)
+        return {"ok": True, "reminders_sent": count}
+    except Exception as e:
+        logger.error(f"Reminder check failed: {e}", exc_info=True)
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/health")

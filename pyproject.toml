@@ -47,7 +47,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["agent", "bot", "config", "db", "commands", "url_normalize"]
+py-modules = ["agent", "bot", "config", "db", "commands", "url_normalize", "summarizer", "personal", "draft_mode", "reminders", "exporter", "export_formatter"]
 packages = ["baml_client", "tools"]
 
 [dependency-groups]

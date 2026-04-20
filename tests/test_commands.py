@@ -201,9 +201,10 @@ class TestCommandList:
         assert "/draft" in COMMAND_LIST
         assert "/decide" in COMMAND_LIST
 
-    def test_command_list_mentions_coming_soon(self):
-        """COMMAND_LIST should indicate future commands."""
-        assert "coming soon" in COMMAND_LIST.lower() or "Coming soon" in COMMAND_LIST
+    def test_command_list_includes_all_commands(self):
+        """COMMAND_LIST should include all implemented commands."""
+        for cmd in ["/note", "/sources", "/delete", "/remind", "/export", "/kb"]:
+            assert cmd in COMMAND_LIST, f"Missing {cmd} in COMMAND_LIST"
 
     def test_command_list_is_html_formatted(self):
         """COMMAND_LIST should have HTML formatting."""

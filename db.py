@@ -1,4 +1,4 @@
-"""Supabase client wrapper — singleton client, message/link storage, user state."""
+"""Supabase client wrapper — singleton client, message/link storage, user state, search."""
 
 import logging
 from datetime import datetime, timezone
@@ -26,6 +26,10 @@ def get_client() -> Client:
     return _client
 
 
+# ---------------------------------------------------------------------------
+# Phase 1: Message & link storage
+# ---------------------------------------------------------------------------
+
 def store_message(
     tg_msg_id: int,
     tg_chat_id: int,
@@ -37,10 +41,7 @@ def store_message(
     reply_to_tg_msg_id: Optional[int] = None,
     forwarded_from: Optional[str] = None,
 ) -> Optional[int]:
-    """Store a group message. Returns internal id or None if duplicate.
-
-    Idempotent via UNIQUE (tg_chat_id, tg_msg_id) — duplicates are ignored.
-    """
+    """Store a group message. Returns internal id or None if duplicate/error."""
     client = get_client()
     row = {
         "tg_msg_id": tg_msg_id,
@@ -114,13 +115,478 @@ def upsert_user(tg_user_id: int, username: Optional[str] = None) -> None:
 def ensure_user_chat_state(tg_user_id: int, tg_chat_id: int) -> None:
     """Ensure a row exists in user_chat_state for this (user, chat) pair."""
     client = get_client()
-    row = {
-        "tg_user_id": tg_user_id,
-        "tg_chat_id": tg_chat_id,
-    }
+    row = {"tg_user_id": tg_user_id, "tg_chat_id": tg_chat_id}
     try:
         client.table("user_chat_state").upsert(
             row, on_conflict="tg_user_id,tg_chat_id", ignore_duplicates=True
         ).execute()
     except Exception as e:
         logger.error(f"Failed to ensure user_chat_state: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Catchup queries
+# ---------------------------------------------------------------------------
+
+def get_user_chats(tg_user_id: int) -> list[dict]:
+    """Get all chats a user has been seen in. Returns list of {tg_chat_id, last_catchup_at}."""
+    client = get_client()
+    try:
+        result = (
+            client.table("user_chat_state")
+            .select("tg_chat_id, last_catchup_at")
+            .eq("tg_user_id", tg_user_id)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Failed to get user chats: {e}")
+        return []
+
+
+def get_last_catchup(tg_user_id: int, tg_chat_id: int) -> Optional[datetime]:
+    """Get last catchup timestamp for a (user, chat) pair."""
+    client = get_client()
+    try:
+        result = (
+            client.table("user_chat_state")
+            .select("last_catchup_at")
+            .eq("tg_user_id", tg_user_id)
+            .eq("tg_chat_id", tg_chat_id)
+            .single()
+            .execute()
+        )
+        if result.data and result.data.get("last_catchup_at"):
+            return datetime.fromisoformat(result.data["last_catchup_at"])
+        return None
+    except Exception as e:
+        logger.error(f"Failed to get last catchup: {e}")
+        return None
+
+
+def update_last_catchup(tg_user_id: int, tg_chat_id: int) -> None:
+    """Update last_catchup_at to now for a (user, chat) pair."""
+    client = get_client()
+    try:
+        client.table("user_chat_state").update(
+            {"last_catchup_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("tg_user_id", tg_user_id).eq("tg_chat_id", tg_chat_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to update last catchup: {e}")
+
+
+def get_messages_since(
+    tg_chat_id: int, since: Optional[datetime] = None, limit: int = 200
+) -> list[dict]:
+    """Get group messages since a timestamp. If since is None, get last `limit` messages."""
+    client = get_client()
+    try:
+        query = (
+            client.table("messages")
+            .select("id, tg_user_id, username, text, timestamp, has_links")
+            .eq("tg_chat_id", tg_chat_id)
+            .order("timestamp", desc=False)
+            .limit(limit)
+        )
+        if since:
+            query = query.gt("timestamp", since.isoformat())
+        result = query.execute()
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Failed to get messages since: {e}")
+        return []
+
+
+def get_link_summaries_for_messages(message_ids: list[int]) -> list[dict]:
+    """Get link summaries for a set of message IDs."""
+    if not message_ids:
+        return []
+    client = get_client()
+    try:
+        result = (
+            client.table("link_summaries")
+            .select("message_id, url, title, summary, link_type")
+            .in_("message_id", message_ids)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Failed to get link summaries: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Full-text search
+# ---------------------------------------------------------------------------
+
+def search_all(tg_user_id: int, query: str, limit: int = 20) -> list[dict]:
+    """Full-text search across messages, link_summaries, and personal_sources.
+
+    Returns results with 'origin' label: 'group' or 'personal'.
+    Personal sources filtered by tg_user_id (privacy boundary).
+    """
+    client = get_client()
+    ts_query = " & ".join(query.strip().split())  # "foo bar" → "foo & bar"
+    results = []
+
+    try:
+        # Search group messages
+        msg_result = (
+            client.table("messages")
+            .select("id, username, text, timestamp")
+            .text_search("search_vector", ts_query)
+            .limit(limit)
+            .execute()
+        )
+        for row in (msg_result.data or []):
+            row["origin"] = "group"
+            row["type"] = "message"
+            results.append(row)
+    except Exception as e:
+        logger.error(f"FTS messages failed: {e}")
+
+    try:
+        # Search link summaries
+        link_result = (
+            client.table("link_summaries")
+            .select("id, url, title, summary, created_at")
+            .text_search("search_vector", ts_query)
+            .limit(limit)
+            .execute()
+        )
+        for row in (link_result.data or []):
+            row["origin"] = "group"
+            row["type"] = "link"
+            results.append(row)
+    except Exception as e:
+        logger.error(f"FTS link_summaries failed: {e}")
+
+    try:
+        # Search personal sources — filtered by user (privacy boundary)
+        personal_result = (
+            client.table("personal_sources")
+            .select("id, source_type, url, title, content, summary, created_at")
+            .eq("tg_user_id", tg_user_id)
+            .text_search("search_vector", ts_query)
+            .limit(limit)
+            .execute()
+        )
+        for row in (personal_result.data or []):
+            row["origin"] = "personal"
+            row["type"] = row.get("source_type", "note")
+            results.append(row)
+    except Exception as e:
+        logger.error(f"FTS personal_sources failed: {e}")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Personal sources CRUD
+# ---------------------------------------------------------------------------
+
+def store_personal_source(
+    tg_user_id: int,
+    source_type: str,
+    content: Optional[str] = None,
+    url: Optional[str] = None,
+    title: Optional[str] = None,
+    summary: Optional[str] = None,
+    original_text: Optional[str] = None,
+) -> Optional[int]:
+    """Store a personal source (link, note, or forwarded message)."""
+    client = get_client()
+    row = {
+        "tg_user_id": tg_user_id,
+        "source_type": source_type,
+        "url": url,
+        "url_normalized": normalize_url(url) if url else None,
+        "title": title,
+        "content": content,
+        "summary": summary,
+        "original_text": original_text,
+    }
+    try:
+        result = client.table("personal_sources").insert(row).execute()
+        if result.data:
+            return result.data[0].get("id")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to store personal source: {e}")
+        return None
+
+
+def get_personal_sources(tg_user_id: int, limit: int = 10) -> list[dict]:
+    """Get recent personal sources for a user."""
+    client = get_client()
+    try:
+        result = (
+            client.table("personal_sources")
+            .select("id, source_type, url, title, content, created_at")
+            .eq("tg_user_id", tg_user_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Failed to get personal sources: {e}")
+        return []
+
+
+def get_personal_sources_count(tg_user_id: int) -> int:
+    """Get count of personal sources for a user."""
+    client = get_client()
+    try:
+        result = (
+            client.table("personal_sources")
+            .select("id", count="exact")
+            .eq("tg_user_id", tg_user_id)
+            .execute()
+        )
+        return result.count or 0
+    except Exception as e:
+        logger.error(f"Failed to count personal sources: {e}")
+        return 0
+
+
+def delete_personal_source(tg_user_id: int, source_id: int) -> bool:
+    """Delete a personal source. Ownership check: must belong to tg_user_id."""
+    client = get_client()
+    try:
+        result = (
+            client.table("personal_sources")
+            .delete()
+            .eq("id", source_id)
+            .eq("tg_user_id", tg_user_id)  # ownership check
+            .execute()
+        )
+        return bool(result.data)
+    except Exception as e:
+        logger.error(f"Failed to delete personal source {source_id}: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Topic queries + draft sessions
+# ---------------------------------------------------------------------------
+
+def get_recent_messages(tg_chat_id: int, hours: int = 48, limit: int = 200) -> list[dict]:
+    """Get recent group messages within a time window."""
+    client = get_client()
+    since = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0
+    )
+    from datetime import timedelta
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    try:
+        result = (
+            client.table("messages")
+            .select("id, tg_user_id, username, text, timestamp, has_links")
+            .eq("tg_chat_id", tg_chat_id)
+            .gt("timestamp", since.isoformat())
+            .order("timestamp", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Failed to get recent messages: {e}")
+        return []
+
+
+def get_messages_by_keyword(
+    tg_chat_id: int, keyword: str, hours: int = 72, limit: int = 100
+) -> list[dict]:
+    """Get messages matching a keyword via FTS within a time window."""
+    client = get_client()
+    from datetime import timedelta
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    try:
+        result = (
+            client.table("messages")
+            .select("id, tg_user_id, username, text, timestamp, has_links")
+            .eq("tg_chat_id", tg_chat_id)
+            .gt("timestamp", since.isoformat())
+            .text_search("search_vector", keyword)
+            .order("timestamp", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Failed to search messages by keyword: {e}")
+        return []
+
+
+def create_draft_session(
+    tg_user_id: int, topic: str, context_snapshot: dict
+) -> Optional[int]:
+    """Create a draft session. Fails if an active session already exists (enforced by DB unique index)."""
+    client = get_client()
+    row = {
+        "tg_user_id": tg_user_id,
+        "topic": topic,
+        "context_snapshot": context_snapshot,
+        "conversation_history": [],
+    }
+    try:
+        result = client.table("draft_sessions").insert(row).execute()
+        if result.data:
+            return result.data[0].get("id")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to create draft session: {e}")
+        return None
+
+
+def get_active_draft_session(tg_user_id: int) -> Optional[dict]:
+    """Get the active (non-ended, non-expired) draft session for a user."""
+    client = get_client()
+    from datetime import timedelta
+    expiry = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    try:
+        result = (
+            client.table("draft_sessions")
+            .select("*")
+            .eq("tg_user_id", tg_user_id)
+            .is_("ended_at", "null")
+            .gt("updated_at", expiry)
+            .single()
+            .execute()
+        )
+        return result.data
+    except Exception:
+        return None
+
+
+def append_draft_message(session_id: int, role: str, content: str) -> None:
+    """Append a message to the draft session's conversation history."""
+    client = get_client()
+    try:
+        # Fetch current history
+        session = (
+            client.table("draft_sessions")
+            .select("conversation_history")
+            .eq("id", session_id)
+            .single()
+            .execute()
+        )
+        history = session.data.get("conversation_history") or []
+        history.append({"role": role, "content": content})
+        client.table("draft_sessions").update({
+            "conversation_history": history,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", session_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to append draft message: {e}")
+
+
+def end_draft_session(session_id: int) -> None:
+    """Mark a draft session as ended."""
+    client = get_client()
+    try:
+        client.table("draft_sessions").update({
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", session_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to end draft session: {e}")
+
+
+def cancel_draft_session(session_id: int) -> None:
+    """Cancel (end without saving) a draft session."""
+    end_draft_session(session_id)
+
+
+def expire_stale_drafts() -> int:
+    """Expire draft sessions inactive >24h. Returns count expired."""
+    client = get_client()
+    from datetime import timedelta
+    expiry = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    try:
+        result = (
+            client.table("draft_sessions")
+            .update({"ended_at": datetime.now(timezone.utc).isoformat()})
+            .is_("ended_at", "null")
+            .lt("updated_at", expiry)
+            .execute()
+        )
+        return len(result.data) if result.data else 0
+    except Exception as e:
+        logger.error(f"Failed to expire stale drafts: {e}")
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Reminder + export helpers
+# ---------------------------------------------------------------------------
+
+def get_users_with_reminders_due() -> list[dict]:
+    """Get users with active reminders (frequency != 'off')."""
+    client = get_client()
+    try:
+        result = (
+            client.table("users")
+            .select("tg_user_id, username, reminder_frequency, timezone, reminder_time")
+            .neq("reminder_frequency", "off")
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Failed to get users with reminders: {e}")
+        return []
+
+
+def update_user_reminder(tg_user_id: int, frequency: str) -> None:
+    """Update a user's reminder frequency."""
+    client = get_client()
+    try:
+        client.table("users").update(
+            {"reminder_frequency": frequency}
+        ).eq("tg_user_id", tg_user_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to update reminder: {e}")
+
+
+def store_export(
+    topic: str, export_target: str, content_hash: str,
+    notebooklm_source_id: Optional[str] = None,
+) -> Optional[int]:
+    """Store an export record. Dedup by (export_target, content_hash)."""
+    client = get_client()
+    row = {
+        "topic": topic,
+        "export_target": export_target,
+        "content_hash": content_hash,
+        "notebooklm_source_id": notebooklm_source_id,
+    }
+    try:
+        result = (
+            client.table("exports")
+            .upsert(row, on_conflict="export_target,content_hash", ignore_duplicates=True)
+            .execute()
+        )
+        if result.data:
+            return result.data[0].get("id")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to store export: {e}")
+        return None
+
+
+def export_exists(export_target: str, content_hash: str) -> bool:
+    """Check if an export with this content_hash already exists."""
+    client = get_client()
+    try:
+        result = (
+            client.table("exports")
+            .select("id")
+            .eq("export_target", export_target)
+            .eq("content_hash", content_hash)
+            .limit(1)
+            .execute()
+        )
+        return bool(result.data)
+    except Exception as e:
+        logger.error(f"Failed to check export existence: {e}")
+        return False
