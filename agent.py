@@ -203,7 +203,11 @@ def get_web_content(state: AgentState) -> Dict[str, Any]:
 
 
 def get_twitter_content(state: AgentState) -> Dict[str, Any]:
-    """Fetches content from a Twitter/X URL using twitter_api_tool."""
+    """Fetches content from a Twitter/X URL using twitter_api_tool.
+
+    X Articles (long-form posts) are detected and extracted via Playwright
+    instead of the Twitter API, since the API returns minimal data for articles.
+    """
     console.print("---GET TWITTER/X CONTENT (twitterapi.io)--- ", style="yellow bold")
     url = state["url"]
     error_message = None
@@ -213,6 +217,31 @@ def get_twitter_content(state: AgentState) -> Dict[str, Any]:
     # Reset error from previous steps if any
     state["error"] = None
     state["needs_web_fallback"] = False  # Reset flag
+
+    # Detect X Articles — they have /article/ in path or are long-form content
+    # that the Twitter API can't handle well
+    is_article = "/article/" in url.lower() or "/articles/" in url.lower()
+
+    if is_article:
+        console.print("Detected X Article — using Playwright for full content", style="cyan")
+        try:
+            from tools.playwright_fallback import extract_page_text
+            pw_text = extract_page_text(url, timeout_ms=30000)
+            if pw_text and len(pw_text) > 100:
+                content_result = pw_text
+                console.print(f"Playwright extracted {len(pw_text)} chars from X Article", style="green")
+            else:
+                error_message = "Could not extract X Article content."
+        except Exception as e:
+            error_message = f"Error extracting X Article: {e}"
+            console.print(error_message, style="red")
+
+        return {
+            "content_type": content_type,
+            "content": content_result.strip(),
+            "error": error_message,
+            "needs_web_fallback": False,
+        }
 
     try:
         console.print(f"Fetching tweet thread for URL: {url}", style="cyan")
@@ -289,8 +318,21 @@ def get_twitter_content(state: AgentState) -> Dict[str, Any]:
         )
         content_result = ""
 
+    # Last resort: if content is still too thin, the URL might be an X Article
+    # or rich thread that the API didn't capture. Try Playwright on original URL.
+    clean_text = _re.sub(r'https?://\S+', '', content_result).strip() if content_result else ""
+    if len(clean_text) < 200 and not error_message:
+        console.print("Tweet content too thin — trying Playwright on original URL as article fallback", style="cyan")
+        try:
+            from tools.playwright_fallback import extract_page_text
+            pw_text = extract_page_text(url, timeout_ms=30000)
+            if pw_text and len(pw_text) > 200:
+                content_result = pw_text
+                console.print(f"Playwright extracted {len(pw_text)} chars from X URL", style="green")
+        except Exception as pw_err:
+            console.print(f"Playwright article fallback failed: {pw_err}", style="yellow")
+
     return {
-        # **state,
         "content_type": content_type,
         "content": content_result.strip(),
         "error": error_message,
