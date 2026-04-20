@@ -223,22 +223,12 @@ def get_twitter_content(state: AgentState) -> Dict[str, Any]:
     is_article = "/article/" in url.lower() or "/articles/" in url.lower()
 
     if is_article:
-        console.print("Detected X Article — using Playwright for full content", style="cyan")
-        try:
-            from tools.playwright_fallback import extract_page_text
-            pw_text = extract_page_text(url, timeout_ms=30000)
-            if pw_text and len(pw_text) > 100:
-                content_result = pw_text
-                console.print(f"Playwright extracted {len(pw_text)} chars from X Article", style="green")
-            else:
-                error_message = "Could not extract X Article content."
-        except Exception as e:
-            error_message = f"Error extracting X Article: {e}"
-            console.print(error_message, style="red")
-
+        # X Articles require login — can't be extracted by bots
+        error_message = "Error: This is an X Article which requires login to view. Bot cannot access it."
+        console.print(error_message, style="yellow")
         return {
             "content_type": content_type,
-            "content": content_result.strip(),
+            "content": "",
             "error": error_message,
             "needs_web_fallback": False,
         }
@@ -280,6 +270,17 @@ def get_twitter_content(state: AgentState) -> Dict[str, Any]:
                         console.print(f"Resolved t.co → {target_url}", style="cyan")
                     except Exception:
                         pass
+
+                # If resolved URL is an X Article, it requires login — skip extraction
+                if "/article/" in target_url or "/articles/" in target_url:
+                    console.print("Linked content is an X Article (requires login) — cannot extract", style="yellow")
+                    error_message = "Error: This tweet links to an X Article which requires login to view."
+                    return {
+                        "content_type": content_type,
+                        "content": "",
+                        "error": error_message,
+                        "needs_web_fallback": False,
+                    }
 
                 console.print(f"Tweet is mostly a link — extracting: {target_url}", style="cyan")
                 extracted = False

@@ -186,10 +186,11 @@ async def _process_links_and_store(
                 asyncio.create_task(_delete_after(sent_msgs, delay_seconds=3600))
         elif isinstance(agent_result, str):
             logger.error(f"Agent error for {urls[0]}: {agent_result}")
-            # Let users know the link couldn't be processed
-            await message.reply_text(
-                f"⚠️ Couldn't extract content from this link (may require login or has bot protection)."
-            )
+            # Give specific feedback based on error type
+            if "X Article" in agent_result or "requires login" in agent_result:
+                await message.reply_text("⚠️ This is an X Article — requires login to view, can't be extracted by bots.")
+            else:
+                await message.reply_text("⚠️ Couldn't extract content from this link (may require login or has bot protection).")
         else:
             logger.error(f"Agent returned {type(agent_result)} for {urls[0]}")
 
