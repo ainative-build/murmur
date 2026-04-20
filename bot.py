@@ -354,7 +354,10 @@ async def webhook(
     try:
         update_data = await request.json()
         update = Update.de_json(update_data, ptb_app.bot)
-        asyncio.create_task(_safe_process_update(update))
+        # Process synchronously — keeps the HTTP request open so Cloud Run
+        # doesn't kill the container while agent pipeline is running.
+        # Telegram allows up to 60s before webhook timeout.
+        await _safe_process_update(update)
         return {"ok": True}
     except json.JSONDecodeError:
         return {"ok": False, "error": "Invalid JSON"}
