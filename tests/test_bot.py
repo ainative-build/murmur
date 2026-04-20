@@ -280,9 +280,12 @@ class TestGroupMessageHandler:
 
     @pytest.mark.asyncio
     async def test_handler_handles_message_without_text(self):
-        """Handler should gracefully handle message without text."""
+        """Handler should gracefully handle message without text or caption."""
         mock_message = Mock()
         mock_message.text = None
+        mock_message.caption = None
+        mock_message.photo = None
+        mock_message.document = None
 
         mock_update = Mock()
         mock_update.effective_message = mock_message

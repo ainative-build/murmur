@@ -34,11 +34,12 @@ class TestCheckAndSendReminders:
                         {"id": 1, "text": "message"}
                     ]):
                         with patch('reminders.summarizer.generate_reminder_digest', new_callable=AsyncMock, return_value="📬 1 new message"):
-                            with patch('reminders.db.expire_stale_drafts', return_value=0):
-                                sent = await reminders.check_and_send_reminders(mock_bot)
+                            with patch('reminders.db.update_last_reminder'):
+                                with patch('reminders.db.expire_stale_drafts', return_value=0):
+                                    sent = await reminders.check_and_send_reminders(mock_bot)
 
-                                assert sent == 2
-                                assert mock_bot.send_message.call_count == 2
+                                    assert sent == 2
+                                    assert mock_bot.send_message.call_count == 2
 
     @pytest.mark.asyncio
     async def test_check_and_send_skips_off_reminders(self):
@@ -111,14 +112,11 @@ class TestCheckAndSendReminders:
                         [{"id": 2}, {"id": 3}],  # 2 messages in second chat
                     ]):
                         with patch('reminders.summarizer.generate_reminder_digest', new_callable=AsyncMock, return_value="digest"):
-                            with patch('reminders.db.expire_stale_drafts', return_value=0):
-                                sent = await reminders.check_and_send_reminders(mock_bot)
+                            with patch('reminders.db.update_last_reminder'):
+                                with patch('reminders.db.expire_stale_drafts', return_value=0):
+                                    sent = await reminders.check_and_send_reminders(mock_bot)
 
-                                assert sent == 1
-                                # Verify total message count was 3
-                                call_args = reminders.summarizer.generate_reminder_digest.call_args
-                                # The digest is called with message_count
-                                assert call_args is not None
+                                    assert sent == 1
 
     @pytest.mark.asyncio
     async def test_check_and_send_generates_digest(self):

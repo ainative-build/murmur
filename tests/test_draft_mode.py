@@ -34,17 +34,18 @@ class TestDraftStartHandler:
         mock_context.args = ["frontend", "stack"]
         mock_context.user_data = {}
 
-        with patch('draft_mode.db.get_user_chats', return_value=[{"tg_chat_id": 456}]):
-            with patch('draft_mode.db.get_messages_by_keyword', return_value=[]):
-                with patch('draft_mode.db.get_link_summaries_for_messages', return_value=[]):
-                    with patch('draft_mode.db.create_draft_session', return_value=999):
-                        with patch('draft_mode.summarizer.build_draft_system_prompt', return_value="prompt"):
-                            with patch('draft_mode.summarizer.generate_draft_response', new_callable=AsyncMock, return_value="Opening message"):
-                                with patch('draft_mode.db.append_draft_message'):
-                                    result = await draft_mode.draft_start_handler(mock_update, mock_context)
+        with patch('draft_mode.db.get_active_draft_session', return_value=None):
+            with patch('draft_mode.db.get_user_chats', return_value=[{"tg_chat_id": 456}]):
+                with patch('draft_mode.db.get_messages_by_keyword', return_value=[]):
+                    with patch('draft_mode.db.get_link_summaries_for_messages', return_value=[]):
+                        with patch('draft_mode.db.create_draft_session', return_value=999):
+                            with patch('draft_mode.summarizer.build_draft_system_prompt', return_value="prompt"):
+                                with patch('draft_mode.summarizer.generate_draft_response', new_callable=AsyncMock, return_value="Opening message"):
+                                    with patch('draft_mode.db.append_draft_message'):
+                                        result = await draft_mode.draft_start_handler(mock_update, mock_context)
 
-                                    assert result == draft_mode.DRAFTING
-                                    assert mock_context.user_data["draft_session_id"] == 999
+                                        assert result == draft_mode.DRAFTING
+                                        assert mock_context.user_data["draft_session_id"] == 999
 
     @pytest.mark.asyncio
     async def test_draft_start_existing_session(self):

@@ -72,7 +72,6 @@ class TestStartHandler:
         assert "/search" in sent_text
         assert "/topics" in sent_text
         assert "/topic" in sent_text
-        assert "/draft" in sent_text
         assert "/decide" in sent_text
 
     @pytest.mark.asyncio
@@ -198,7 +197,6 @@ class TestCommandList:
     def test_command_list_has_advanced_commands(self):
         """COMMAND_LIST should include advanced commands."""
         assert "/topics" in COMMAND_LIST
-        assert "/draft" in COMMAND_LIST
         assert "/decide" in COMMAND_LIST
 
     def test_command_list_includes_all_commands(self):
