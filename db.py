@@ -618,3 +618,24 @@ def export_exists(export_target: str, content_hash: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to check export existence: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Feedback
+# ---------------------------------------------------------------------------
+
+def store_feedback(tg_user_id: int, username: Optional[str], feedback_text: str) -> Optional[int]:
+    """Store user feedback."""
+    client = get_client()
+    try:
+        result = client.table("feedback").insert({
+            "tg_user_id": tg_user_id,
+            "username": username,
+            "feedback_text": feedback_text,
+        }).execute()
+        if result.data:
+            return result.data[0].get("id")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to store feedback: {e}")
+        return None

@@ -55,6 +55,7 @@ COMMAND_LIST = """
 /remind &lt;off|daily|weekly&gt; — Set reminder frequency
 /export — Export topics to NotebookLM
 /kb — Link to team knowledge base
+/feedback &lt;text&gt; — Send feedback to improve Murmur
 """
 
 
@@ -477,3 +478,22 @@ async def kb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
     else:
         await update.message.reply_text("⚠️ NotebookLM notebook not configured yet.")
+
+
+# ---------------------------------------------------------------------------
+# /feedback — collect user feedback
+# ---------------------------------------------------------------------------
+
+async def feedback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /feedback <text> — collect user feedback for product iteration."""
+    text = " ".join(context.args) if context.args else ""
+    if not text:
+        await update.message.reply_text("Usage: /feedback &lt;your feedback&gt;", parse_mode="HTML")
+        return
+
+    user = update.effective_user
+    feedback_id = db.store_feedback(user.id, user.username, text)
+    if feedback_id:
+        await update.message.reply_text("🙏 Thanks for your feedback! We'll use it to improve Murmur.")
+    else:
+        await update.message.reply_text("❌ Failed to save feedback. Please try again.")

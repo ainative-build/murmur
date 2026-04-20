@@ -30,7 +30,7 @@ from commands import (
     start_handler, catchup_handler, search_handler,
     note_handler, sources_handler, delete_handler, dm_message_handler,
     topics_handler, topic_handler, decide_handler,
-    remind_handler, export_handler, kb_handler,
+    remind_handler, export_handler, kb_handler, feedback_handler,
 )
 # draft_mode disabled for now — ConversationHandler UX needs refinement
 
@@ -65,6 +65,7 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("remind", remind_handler, filters=private))
     app.add_handler(CommandHandler("export", export_handler, filters=private))
     app.add_handler(CommandHandler("kb", kb_handler, filters=private))
+    app.add_handler(CommandHandler("feedback", feedback_handler, filters=private))
 
     # DM non-command messages — links, forwards, plain text.
     app.add_handler(MessageHandler(
