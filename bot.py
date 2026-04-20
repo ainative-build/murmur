@@ -159,17 +159,15 @@ async def _process_links_and_store(
                     summary=agent_result,
                 )
 
-            # Agent returns markdown — send as Markdown, fallback to plain text
+            # Send as plain text — BAML output has markdown syntax (#, **, etc.)
+            # that Telegram's Markdown parser chokes on. Plain text is readable enough.
             for i in range(0, len(agent_result), MAX_TELEGRAM_MSG_LEN):
                 raw_chunk = agent_result[i:i + MAX_TELEGRAM_MSG_LEN]
                 try:
-                    await message.reply_text(raw_chunk, parse_mode=ParseMode.MARKDOWN)
-                except Exception:
-                    try:
-                        await message.reply_text(raw_chunk)
-                    except Exception as e:
-                        logger.error(f"Failed to send chunk: {e}")
-                        break
+                    await message.reply_text(raw_chunk)
+                except Exception as e:
+                    logger.error(f"Failed to send chunk: {e}")
+                    break
                 if i + MAX_TELEGRAM_MSG_LEN < len(agent_result):
                     await asyncio.sleep(0.5)
         elif isinstance(agent_result, str):

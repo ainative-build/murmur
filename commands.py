@@ -19,13 +19,14 @@ MAX_MSG_LEN = 4096
 URL_REGEX = r"(https?:\/\/[^\s]+)"
 
 
-async def _send_long(update: Update, text: str, parse_mode: str = "HTML") -> None:
+async def _send_long(update: Update, text: str, parse_mode: str | None = "HTML") -> None:
     """Send a long message, chunking if needed."""
     for i in range(0, len(text), MAX_MSG_LEN):
         chunk = text[i:i + MAX_MSG_LEN]
         try:
             await update.message.reply_text(chunk, parse_mode=parse_mode)
         except Exception:
+            # Fallback to plain text if parse mode fails
             await update.message.reply_text(chunk)
 
 
@@ -125,12 +126,12 @@ async def catchup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Generate digest via Gemini
     digest = await summarizer.generate_catchup(messages, link_summaries)
 
-    header = f"📋 <b>Catch-up</b> ({len(messages)} messages"
+    header = f"📋 Catch-up ({len(messages)} messages"
     if link_summaries:
         header += f", {len(link_summaries)} links"
     header += ")\n\n"
 
-    await _send_long(update, header + html.escape(digest))
+    await _send_long(update, header + digest, parse_mode=None)
     db.update_last_catchup(tg_user_id, tg_chat_id)
 
 
