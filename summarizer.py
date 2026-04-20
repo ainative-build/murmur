@@ -53,7 +53,7 @@ CATCHUP_SYSTEM = """You are Murmur, a team discussion summarizer. Create a conci
 Rules:
 - Group messages by topic/thread
 - For each topic: 1-2 sentence summary with the actual names of who said what
-- Always use the exact usernames from the messages (e.g. "@PMC836 said..." not "a user mentioned...")
+- Always use the EXACT usernames from the messages — copy them character-for-character (e.g. "@PMC836 said..." not "@C836" or "a user mentioned...")
 - Mention shared links with brief description
 - Format each topic as: "TOPIC NAME\nSummary with @username attributions\n"
 - If links were shared, add: 🔗 link title/description
@@ -110,8 +110,9 @@ TOPICS_SYSTEM = """You are Murmur, a team discussion analyzer. Identify 3-8 dist
 Rules:
 - Each topic gets a short name (2-5 words) and a 1-2 sentence description
 - Include key participants for each topic
+- IMPORTANT: Copy usernames EXACTLY as they appear in the messages — do NOT shorten, modify, or abbreviate them. If the message says "PMC836", output "PMC836" not "C836".
 - Return ONLY valid JSON array, no markdown
-- Format: [{"name": "...", "description": "...", "participants": ["user1", "user2"]}]
+- Format: [{"name": "...", "description": "...", "participants": ["PMC836", "other_user"]}]
 """
 
 
