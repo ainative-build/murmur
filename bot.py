@@ -159,10 +159,11 @@ async def _process_links_and_store(
                     summary=agent_result,
                 )
 
+            # Agent returns markdown — send as Markdown, fallback to plain text
             for i in range(0, len(agent_result), MAX_TELEGRAM_MSG_LEN):
                 raw_chunk = agent_result[i:i + MAX_TELEGRAM_MSG_LEN]
                 try:
-                    await message.reply_text(html.escape(raw_chunk), parse_mode=ParseMode.HTML)
+                    await message.reply_text(raw_chunk, parse_mode=ParseMode.MARKDOWN)
                 except Exception:
                     try:
                         await message.reply_text(raw_chunk)
