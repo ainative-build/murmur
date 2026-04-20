@@ -154,15 +154,19 @@ def get_web_content(state: AgentState) -> Dict[str, Any]:
                         "content", ""
                     )  # Fallback if raw_content is missing
 
-                if raw_content:  # Only add if content exists
+                # Ensure raw_content is a string (Tavily may return dict for some URLs)
+                if isinstance(raw_content, dict):
+                    raw_content = raw_content.get("text", str(raw_content))
+                if raw_content:
                     content_source += f"URL: {res.get('url', 'N/A')}\n"
                     content_source += f"Raw Content: {raw_content}\n\n"
                 # Optional: Include images if needed later
                 # content_source += f"Images: {res.get('images', [])}\n"
 
         if failed_results:
+            failed_urls = [r.get("url", str(r)) if isinstance(r, dict) else str(r) for r in failed_results]
             error_message = (
-                f"Tavily failed to extract content from: {', '.join(failed_results)}"
+                f"Tavily failed to extract content from: {', '.join(failed_urls)}"
             )
             console.print(error_message, style="red")
             # If extraction failed entirely and we have no content, set content_source empty
