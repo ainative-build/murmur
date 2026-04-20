@@ -66,22 +66,25 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("export", export_handler, filters=private))
     app.add_handler(CommandHandler("kb", kb_handler, filters=private))
 
-    # Draft mode — ConversationHandler for multi-turn /draft in DM
+    # Draft mode — ConversationHandler for multi-turn /draft in DM.
+    # Must be registered BEFORE the catch-all dm_message_handler.
+    # State handler needs private filter to avoid matching group messages.
     draft_handler = ConversationHandler(
         entry_points=[CommandHandler("draft", draft_start_handler, filters=private)],
         states={
-            DRAFTING: [MessageHandler(filters.TEXT & (~filters.COMMAND), draft_continue_handler)],
+            DRAFTING: [MessageHandler(filters.TEXT & (~filters.COMMAND) & private, draft_continue_handler)],
         },
         fallbacks=[
             CommandHandler("done", draft_end_handler),
             CommandHandler("cancel", draft_cancel_handler),
         ],
         per_user=True,
-        per_chat=True,
+        per_chat=False,  # per_chat=False so state persists in private chat regardless of chat_id
     )
     app.add_handler(draft_handler)
 
-    # DM non-command messages — links, forwards, plain text
+    # DM non-command messages — links, forwards, plain text.
+    # Only fires when NOT in a ConversationHandler state (draft mode).
     app.add_handler(MessageHandler(
         filters.TEXT & (~filters.COMMAND) & private,
         dm_message_handler,
