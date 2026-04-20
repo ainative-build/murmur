@@ -86,11 +86,11 @@ def _register_handlers(app: Application) -> None:
         dm_message_handler,
     ))
 
-    # Group messages: capture ALL text (including commands) for history.
+    # Group messages: capture ALL text + photos + documents for history.
     # group=1 runs alongside command handlers in group 0.
     app.add_handler(
         MessageHandler(
-            filters.TEXT & filters.ChatType.GROUPS,
+            (filters.TEXT | filters.PHOTO | filters.Document.ALL) & filters.ChatType.GROUPS,
             group_message_handler,
         ),
         group=1,
@@ -100,17 +100,32 @@ def _register_handlers(app: Application) -> None:
 # --- Handlers ---
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Capture ALL group messages into Supabase. If message has links, also run agent pipeline."""
+    """Capture ALL group messages (text + photos + docs) into Supabase."""
     message = update.effective_message
-    if not message or not message.text:
+    if not message:
         return
 
     tg_user_id = message.from_user.id if message.from_user else 0
     username = message.from_user.username if message.from_user else None
-    text = message.text
     tg_chat_id = message.chat_id
     tg_msg_id = message.message_id
     timestamp = message.date or datetime.now(timezone.utc)
+
+    # Get text — could be message.text or message.caption (for photos/docs)
+    text = message.text or message.caption or ""
+
+    # Check if this is a photo/document that needs vision analysis
+    has_photo = bool(message.photo)
+    has_document = bool(message.document)
+
+    # If photo, analyze with Gemini vision and prepend description to text
+    if has_photo:
+        description = await _analyze_image(message, context)
+        if description:
+            text = f"[Image: {description}]" + (f"\n{text}" if text else "")
+
+    if not text:
+        return  # Nothing to store (no text, no caption, image analysis failed)
 
     urls = re.findall(URL_REGEX, text)
     has_links = len(urls) > 0
@@ -187,6 +202,49 @@ async def _process_links_and_store(
 
     except Exception as e:
         logger.error(f"Error processing links: {e}", exc_info=True)
+
+
+async def _analyze_image(message, context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    """Download a photo from Telegram and analyze it with Gemini 3 vision.
+
+    Returns a brief text description or None on failure.
+    """
+    try:
+        from google.genai import types as genai_types
+        from summarizer import get_genai_client, MODEL_FLASH
+
+        # Get the largest photo size
+        photo = message.photo[-1]  # last = highest resolution
+        file = await context.bot.get_file(photo.file_id)
+
+        # Download to bytes
+        photo_bytes = await file.download_as_bytearray()
+
+        client = get_genai_client()
+        caption = message.caption or ""
+        prompt = f"Describe this image concisely in 1-2 sentences for a team discussion log.{f' Context: {caption}' if caption else ''}"
+
+        response = await client.aio.models.generate_content(
+            model=MODEL_FLASH,
+            contents=[
+                genai_types.Content(
+                    role="user",
+                    parts=[
+                        genai_types.Part(text=prompt),
+                        genai_types.Part.from_bytes(data=bytes(photo_bytes), mime_type="image/jpeg"),
+                    ],
+                )
+            ],
+            config=genai_types.GenerateContentConfig(max_output_tokens=256),
+        )
+        description = response.text
+        if description:
+            logger.info(f"Image analyzed: {description[:80]}")
+            return description.strip()
+        return None
+    except Exception as e:
+        logger.error(f"Image analysis failed: {e}")
+        return None
 
 
 async def _delete_after(messages: list, delay_seconds: int = 3600) -> None:
