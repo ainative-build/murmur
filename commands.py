@@ -48,7 +48,6 @@ COMMAND_LIST = """
 /search &lt;keyword&gt; — Search messages and links
 /topics — List active discussion threads
 /topic &lt;name&gt; — Deep dive on a specific topic
-/draft &lt;topic&gt; — Brainstorm with AI using team context
 /decide &lt;topic&gt; — Structured decision view on a topic
 /note &lt;text&gt; — Save a personal note
 /sources — List your personal sources

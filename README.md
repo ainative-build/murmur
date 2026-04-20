@@ -19,7 +19,6 @@ Silent listener that captures team discussions, summarizes shared links, and pro
 | `/search <keyword>` | Search messages and links | Phase 2 |
 | `/topics` | List active discussion threads | Phase 3 |
 | `/topic <name>` | Deep dive on a specific topic | Phase 3 |
-| `/draft <topic>` | Multi-turn brainstorm with AI using team context | Phase 3 |
 | `/decide <topic>` | Structured decision view (options, arguments, evidence) | Phase 3 |
 | `/remind` | Configure reminder frequency | Phase 4 |
 | `/export` | Export topics to NotebookLM | Phase 4 |
@@ -191,9 +190,12 @@ User DM ◄──► Murmur Bot (commands)
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 1. Foundation | Group capture, Supabase, /start, Gemini 3 | ✅ Complete |
-| 2. Core Usability | /catchup, /search, personal memory | Pending |
-| 3. Structured Intelligence | /topics, /topic, /draft, /decide | Pending |
-| 4. Extended Workflows | Reminders, NotebookLM export | Pending |
+| 2. Core Usability | /catchup, /search, personal memory | ✅ Complete |
+| 3. Structured Intelligence | /topics, /topic, /decide | ✅ Complete |
+| 4. Extended Workflows | Reminders, markdown export | ✅ Complete |
+
+### Planned
+- `/draft <topic>` — Multi-turn AI brainstorm with team context (ConversationHandler UX needs refinement)
 
 See `plans/260419-1156-murmur-bot/plan.md` for detailed phase plans.
 
