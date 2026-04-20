@@ -230,15 +230,14 @@ def search_all(tg_user_id: int, query: str, limit: int = 20) -> list[dict]:
     results = []
 
     try:
-        # Search group messages
+        # Search group messages (text_search doesn't support .limit() chaining)
         msg_result = (
             client.table("messages")
             .select("id, username, text, timestamp")
             .text_search("search_vector", ts_query)
-            .limit(limit)
             .execute()
         )
-        for row in (msg_result.data or []):
+        for row in (msg_result.data or [])[:limit]:
             row["origin"] = "group"
             row["type"] = "message"
             results.append(row)
@@ -246,15 +245,13 @@ def search_all(tg_user_id: int, query: str, limit: int = 20) -> list[dict]:
         logger.error(f"FTS messages failed: {e}")
 
     try:
-        # Search link summaries
         link_result = (
             client.table("link_summaries")
             .select("id, url, title, summary, created_at")
             .text_search("search_vector", ts_query)
-            .limit(limit)
             .execute()
         )
-        for row in (link_result.data or []):
+        for row in (link_result.data or [])[:limit]:
             row["origin"] = "group"
             row["type"] = "link"
             results.append(row)
@@ -262,16 +259,15 @@ def search_all(tg_user_id: int, query: str, limit: int = 20) -> list[dict]:
         logger.error(f"FTS link_summaries failed: {e}")
 
     try:
-        # Search personal sources — filtered by user (privacy boundary)
+        # Personal sources — filtered by user (privacy boundary)
         personal_result = (
             client.table("personal_sources")
             .select("id, source_type, url, title, content, summary, created_at")
             .eq("tg_user_id", tg_user_id)
             .text_search("search_vector", ts_query)
-            .limit(limit)
             .execute()
         )
-        for row in (personal_result.data or []):
+        for row in (personal_result.data or [])[:limit]:
             row["origin"] = "personal"
             row["type"] = row.get("source_type", "note")
             results.append(row)
