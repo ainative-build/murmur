@@ -25,6 +25,7 @@ from telegram.constants import ParseMode
 import config
 import db
 from agent import run_agent
+from telegram_format import md_to_telegram_html
 from commands import (
     start_handler, catchup_handler, search_handler,
     note_handler, sources_handler, delete_handler, dm_message_handler,
@@ -174,18 +175,24 @@ async def _process_links_and_store(
                     summary=agent_result,
                 )
 
-            # Send as plain text, schedule auto-delete after 1 hour.
-            # Summary is persisted in Supabase — group chat stays clean.
+            # Convert markdown to Telegram HTML, schedule auto-delete after 1 hour.
+            formatted = md_to_telegram_html(agent_result)
             sent_msgs = []
-            for i in range(0, len(agent_result), MAX_TELEGRAM_MSG_LEN):
-                raw_chunk = agent_result[i:i + MAX_TELEGRAM_MSG_LEN]
+            for i in range(0, len(formatted), MAX_TELEGRAM_MSG_LEN):
+                chunk = formatted[i:i + MAX_TELEGRAM_MSG_LEN]
                 try:
-                    sent = await message.reply_text(raw_chunk)
+                    sent = await message.reply_text(chunk, parse_mode=ParseMode.HTML)
                     sent_msgs.append(sent)
-                except Exception as e:
-                    logger.error(f"Failed to send chunk: {e}")
-                    break
-                if i + MAX_TELEGRAM_MSG_LEN < len(agent_result):
+                except Exception:
+                    # Fallback to plain text if HTML parsing fails
+                    try:
+                        raw_chunk = agent_result[i:i + MAX_TELEGRAM_MSG_LEN]
+                        sent = await message.reply_text(raw_chunk)
+                        sent_msgs.append(sent)
+                    except Exception as e:
+                        logger.error(f"Failed to send chunk: {e}")
+                        break
+                if i + MAX_TELEGRAM_MSG_LEN < len(formatted):
                     await asyncio.sleep(0.5)
 
             # Schedule deletion after 1 hour

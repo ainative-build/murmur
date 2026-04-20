@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 import db
 import summarizer
 import personal
+from telegram_format import md_to_telegram_html
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,10 @@ async def draft_continue_handler(update: Update, context: ContextTypes.DEFAULT_T
     response = await summarizer.generate_draft_response(history, system_prompt)
     db.append_draft_message(session_id, "model", response)
 
-    await update.message.reply_text(response)
+    try:
+        await update.message.reply_text(md_to_telegram_html(response), parse_mode="HTML")
+    except Exception:
+        await update.message.reply_text(response)
     return DRAFTING
 
 

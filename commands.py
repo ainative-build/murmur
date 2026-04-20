@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 import config
 import db
 import summarizer
+from telegram_format import md_to_telegram_html
 import personal
 
 logger = logging.getLogger(__name__)
@@ -20,14 +21,19 @@ URL_REGEX = r"(https?:\/\/[^\s]+)"
 
 
 async def _send_long(update: Update, text: str, parse_mode: str | None = "HTML") -> None:
-    """Send a long message, chunking if needed."""
+    """Send a long message, chunking if needed. Falls back to plain text on parse failure."""
     for i in range(0, len(text), MAX_MSG_LEN):
         chunk = text[i:i + MAX_MSG_LEN]
         try:
             await update.message.reply_text(chunk, parse_mode=parse_mode)
         except Exception:
-            # Fallback to plain text if parse mode fails
             await update.message.reply_text(chunk)
+
+
+async def _send_llm_response(update: Update, text: str) -> None:
+    """Send an LLM response, converting markdown to Telegram HTML."""
+    formatted = md_to_telegram_html(text)
+    await _send_long(update, formatted, parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
@@ -126,12 +132,12 @@ async def catchup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Generate digest via Gemini
     digest = await summarizer.generate_catchup(messages, link_summaries)
 
-    header = f"📋 Catch-up ({len(messages)} messages"
+    header = f"📋 <b>Catch-up</b> ({len(messages)} messages"
     if link_summaries:
         header += f", {len(link_summaries)} links"
     header += ")\n\n"
 
-    await _send_long(update, header + digest, parse_mode=None)
+    await _send_long(update, header + md_to_telegram_html(digest), parse_mode="HTML")
     db.update_last_catchup(tg_user_id, tg_chat_id)
 
 
@@ -346,7 +352,7 @@ async def topic_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     detail = await summarizer.generate_topic_detail(messages, links, topic_name)
     header = f"🔎 <b>Topic: {html.escape(topic_name)}</b>\n\n"
-    await _send_long(update, header + html.escape(detail))
+    await _send_long(update, header + md_to_telegram_html(detail), parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +385,7 @@ async def decide_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     view = await summarizer.generate_decision_view(messages, links, topic)
     header = f"⚖️ <b>Decision: {html.escape(topic)}</b>\n\n"
-    await _send_long(update, header + html.escape(view))
+    await _send_long(update, header + md_to_telegram_html(view), parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
