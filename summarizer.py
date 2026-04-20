@@ -289,19 +289,23 @@ async def generate_draft_response(
             parts=[types.Part(text=msg["content"])],
         ))
 
-    try:
-        response = await client.aio.models.generate_content(
-            model=MODEL_PRO,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=1024,
-            ),
-        )
-        return response.text or "..."
-    except Exception as e:
-        logger.error(f"Draft response generation failed: {e}")
-        return f"Sorry, I had trouble generating a response. Error: {e}"
+    # Try Pro first, fallback to Flash if Pro is unavailable (503)
+    for model in [MODEL_PRO, MODEL_FLASH]:
+        try:
+            response = await client.aio.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    max_output_tokens=1024,
+                ),
+            )
+            return response.text or "..."
+        except Exception as e:
+            logger.warning(f"Draft generation with {model} failed: {e}")
+            if model == MODEL_FLASH:
+                return f"Sorry, I had trouble generating a response. Please try again later."
+    return "Sorry, all models are temporarily unavailable. Please try again later."
 
 
 # ---------------------------------------------------------------------------

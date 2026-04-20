@@ -398,16 +398,20 @@ def get_messages_by_keyword(
     client = get_client()
     from datetime import timedelta
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    # Sanitize keyword for tsquery: split into words, join with & (AND)
+    words = [w.strip() for w in keyword.strip().split() if w.strip()]
+    if not words:
+        return []
+    ts_query = " & ".join(words)
     try:
         result = (
             client.table("messages")
             .select("id, tg_user_id, username, text, timestamp, has_links")
             .eq("tg_chat_id", tg_chat_id)
             .gt("timestamp", since.isoformat())
-            .text_search("search_vector", keyword)
+            .text_search("search_vector", ts_query)
             .execute()
         )
-        # text_search() breaks .order()/.limit() chain in supabase-py — sort in Python
         data = sorted((result.data or []), key=lambda m: m.get("timestamp", ""))
         return data[:limit]
     except Exception as e:
