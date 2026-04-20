@@ -11,7 +11,7 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
-def extract_page_text(url: str, timeout_ms: int = 15000) -> str | None:
+def extract_page_text(url: str, timeout_ms: int = 30000) -> str | None:
     """Render a URL in headless Chromium and extract visible text content.
 
     Returns extracted text or None on failure.
@@ -28,10 +28,11 @@ def extract_page_text(url: str, timeout_ms: int = 15000) -> str | None:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
-            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            # Use domcontentloaded — networkidle never fires on heavy SPAs (Grok, etc.)
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
 
-            # Wait a bit for JS rendering to settle
-            page.wait_for_timeout(2000)
+            # Wait for JS rendering to settle
+            page.wait_for_timeout(5000)
 
             # Extract main content — try common content selectors first
             text = None
