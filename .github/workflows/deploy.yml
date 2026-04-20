@@ -1,0 +1,106 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: ${{ secrets.GCP_REGION }}
+  SERVICE_NAME: murmur-bot
+  REPO_NAME: murmur-bot-repo
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen
+      - run: uv run python -m pytest tests/ -v --tb=short
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      - name: Ensure Artifact Registry repo
+        run: |
+          gcloud artifacts repositories describe ${{ env.REPO_NAME }} \
+            --location=${{ env.REGION }} 2>/dev/null || \
+          gcloud artifacts repositories create ${{ env.REPO_NAME }} \
+            --repository-format=docker \
+            --location=${{ env.REGION }}
+
+      - name: Build and push
+        run: |
+          IMAGE=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}:${{ github.ref_name }}
+          docker build -t $IMAGE .
+          docker push $IMAGE
+
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}:${{ github.ref_name }}
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image=$IMAGE \
+            --platform=managed \
+            --region=${{ env.REGION }} \
+            --port=8080 \
+            --allow-unauthenticated \
+            --memory=1024Mi \
+            --min-instances=1 \
+            --cpu-throttling \
+            --set-secrets="\
+              TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,\
+              TELEGRAM_WEBHOOK_SECRET_TOKEN=TELEGRAM_WEBHOOK_SECRET_TOKEN:latest,\
+              WEBHOOK_SECRET_PATH=WEBHOOK_SECRET_PATH:latest,\
+              GEMINI_API_KEY=GEMINI_API_KEY:latest,\
+              DEEPSEEK_API_KEY=DEEPSEEK_API_KEY:latest,\
+              TAVILY_API_KEY=TAVILY_API_KEY:latest,\
+              AGENTQL_API_KEY=AGENTQL_API_KEY:latest,\
+              SUPABASE_URL=SUPABASE_URL:latest,\
+              SUPABASE_KEY=SUPABASE_KEY:latest"
+
+      - name: Set webhook
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --platform=managed --region=${{ env.REGION }} \
+            --format='value(status.url)')
+          BOT_TOKEN=$(gcloud secrets versions access latest --secret=TELEGRAM_BOT_TOKEN)
+          WEBHOOK_PATH=$(gcloud secrets versions access latest --secret=WEBHOOK_SECRET_PATH 2>/dev/null || echo "webhook")
+          WEBHOOK_SECRET=$(gcloud secrets versions access latest --secret=TELEGRAM_WEBHOOK_SECRET_TOKEN 2>/dev/null || echo "")
+
+          WEBHOOK_URL="${SERVICE_URL}/${WEBHOOK_PATH}"
+          echo "Setting webhook to: $WEBHOOK_URL"
+
+          if [ -n "$WEBHOOK_SECRET" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
+              -H "Content-Type: application/json" \
+              -d "{\"url\": \"$WEBHOOK_URL\", \"secret_token\": \"$WEBHOOK_SECRET\"}"
+          else
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
+              -H "Content-Type: application/json" \
+              -d "{\"url\": \"$WEBHOOK_URL\"}"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

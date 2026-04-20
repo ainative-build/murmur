@@ -14,14 +14,16 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # Define the secrets to map from Secret Manager to Cloud Run environment variables.
 # Format: "ENV_VAR_NAME_IN_CLOUDRUN=SECRET_NAME_IN_MANAGER:latest"
 SECRETS_TO_MAP=(
+  "TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest"
+  "TELEGRAM_WEBHOOK_SECRET_TOKEN=TELEGRAM_WEBHOOK_SECRET_TOKEN:latest"
+  "WEBHOOK_SECRET_PATH=WEBHOOK_SECRET_PATH:latest"
   "GEMINI_API_KEY=GEMINI_API_KEY:latest"
   "DEEPSEEK_API_KEY=DEEPSEEK_API_KEY:latest"
   "TAVILY_API_KEY=TAVILY_API_KEY:latest"
   "TWITTER_API_IO_KEY=TWITTER_API_IO_KEY:latest"
   "AGENTQL_API_KEY=AGENTQL_API_KEY:latest"
-  "TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest"
-  "TELEGRAM_WEBHOOK_SECRET_TOKEN=TELEGRAM_WEBHOOK_SECRET_TOKEN:latest"
-  "WEBHOOK_SECRET_PATH=WEBHOOK_SECRET_PATH:latest"
+  "SUPABASE_URL=SUPABASE_URL:latest"
+  "SUPABASE_KEY=SUPABASE_KEY:latest"
 )
 
 # --- Script Logic --- 
@@ -41,11 +43,11 @@ if [ -z "${REGION}" ]; then read -p "Enter Google Cloud Region (e.g., us-central
 if [ -z "${REGION}" ]; then echo "Error: Region is required." >&2; exit 1; fi
 gcloud config set run/region "$REGION"
 
-SERVICE_NAME=${SERVICE_NAME:-"telegram-summarizer"}
+SERVICE_NAME=${SERVICE_NAME:-"murmur-bot"}
 read -p "Enter Cloud Run Service Name [${SERVICE_NAME}]: " INPUT_SERVICE_NAME
 SERVICE_NAME=${INPUT_SERVICE_NAME:-$SERVICE_NAME}
 
-REPO_NAME=${REPO_NAME:-"summarizer-bot-repo"}
+REPO_NAME=${REPO_NAME:-"murmur-bot-repo"}
 read -p "Enter Artifact Registry Repository Name [${REPO_NAME}]: " INPUT_REPO_NAME
 REPO_NAME=${INPUT_REPO_NAME:-$REPO_NAME}
 
