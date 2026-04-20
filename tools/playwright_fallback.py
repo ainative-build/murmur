@@ -53,8 +53,24 @@ def extract_page_text(url: str, timeout_ms: int = 30000) -> str | None:
             browser.close()
 
             if text and len(text.strip()) > 50:
-                # Trim to reasonable length for summarization
                 trimmed = text.strip()[:15000]
+
+                # Detect bot-check / security interstitial pages
+                bot_check_signals = [
+                    "verify you are human",
+                    "security check",
+                    "checking your browser",
+                    "just a moment",
+                    "enable javascript",
+                    "cloudflare",
+                    "confirm you are not a bot",
+                    "verifying",
+                ]
+                lower = trimmed.lower()
+                if any(s in lower for s in bot_check_signals) and len(trimmed) < 500:
+                    console.print("Playwright: detected bot-check page, skipping", style="yellow")
+                    return None
+
                 console.print(f"Playwright extracted {len(trimmed)} chars", style="green")
                 return trimmed
             else:

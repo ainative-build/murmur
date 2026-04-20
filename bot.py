@@ -172,6 +172,10 @@ async def _process_links_and_store(
                     await asyncio.sleep(0.5)
         elif isinstance(agent_result, str):
             logger.error(f"Agent error for {urls[0]}: {agent_result}")
+            # Let users know the link couldn't be processed
+            await message.reply_text(
+                f"⚠️ Couldn't extract content from this link (may require login or has bot protection)."
+            )
         else:
             logger.error(f"Agent returned {type(agent_result)} for {urls[0]}")
 
