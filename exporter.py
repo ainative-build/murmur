@@ -6,16 +6,15 @@ Dedup via content_hash in exports table.
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
+import config
 import db
 import summarizer
 from export_formatter import format_topic_document, content_hash
 
 logger = logging.getLogger(__name__)
-
-NOTEBOOKLM_NOTEBOOK_ID = os.getenv("NOTEBOOKLM_NOTEBOOK_ID", "")
-GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "")
 
 
 async def export_topics(tg_chat_id: Optional[int] = None) -> int:
@@ -29,14 +28,15 @@ async def export_topics(tg_chat_id: Optional[int] = None) -> int:
     if tg_chat_id:
         chat_ids = [tg_chat_id]
     else:
-        # Get all chats with recent messages (simplification: query messages table)
+        # Get all distinct chats with recent activity (last 48h)
+        from datetime import timedelta
+        since = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
         client = db.get_client()
         try:
             result = (
                 client.table("messages")
                 .select("tg_chat_id")
-                .order("timestamp", desc=True)
-                .limit(1)
+                .gt("timestamp", since)
                 .execute()
             )
             chat_ids = list({r["tg_chat_id"] for r in (result.data or [])})
@@ -108,15 +108,15 @@ async def export_topics(tg_chat_id: Optional[int] = None) -> int:
 
 async def _upload_to_notebooklm(title: str, content: str) -> bool:
     """Upload a document to NotebookLM via notebooklm-py."""
-    if not NOTEBOOKLM_NOTEBOOK_ID:
-        logger.warning("NOTEBOOKLM_NOTEBOOK_ID not set, skipping NotebookLM upload")
+    if not config.NOTEBOOKLM_NOTEBOOK_ID:
+        logger.warning("config.NOTEBOOKLM_NOTEBOOK_ID not set, skipping NotebookLM upload")
         return False
 
     try:
         from notebooklm import NotebookLM
         nlm = NotebookLM()
         nlm.add_source(
-            notebook_id=NOTEBOOKLM_NOTEBOOK_ID,
+            notebook_id=config.NOTEBOOKLM_NOTEBOOK_ID,
             source_type="text",
             title=title,
             content=content,
@@ -132,15 +132,15 @@ async def _upload_to_notebooklm(title: str, content: str) -> bool:
 
 def _upload_to_gdrive(title: str, content: str) -> bool:
     """Upload markdown to Google Drive as fallback."""
-    if not GDRIVE_FOLDER_ID:
-        logger.warning("GDRIVE_FOLDER_ID not set, skipping Google Drive upload")
+    if not config.GDRIVE_FOLDER_ID:
+        logger.warning("config.GDRIVE_FOLDER_ID not set, skipping Google Drive upload")
         return False
 
     try:
         from googleapiclient.discovery import build
         from google.oauth2 import service_account
 
-        creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
+        creds_path = config.GOOGLE_CREDENTIALS_PATH
         if not creds_path:
             return False
 
@@ -149,7 +149,7 @@ def _upload_to_gdrive(title: str, content: str) -> bool:
 
         file_metadata = {
             "name": f"{title}.md",
-            "parents": [GDRIVE_FOLDER_ID],
+            "parents": [config.GDRIVE_FOLDER_ID],
             "mimeType": "text/markdown",
         }
         from googleapiclient.http import MediaInMemoryUpload

@@ -178,7 +178,7 @@ class TestUploadToNotebooklm:
         mock_module = Mock()
         mock_module.NotebookLM = mock_nlm_class
 
-        with patch('exporter.NOTEBOOKLM_NOTEBOOK_ID', 'notebook_123'):
+        with patch('exporter.config.NOTEBOOKLM_NOTEBOOK_ID', 'notebook_123'):
             with patch.dict('sys.modules', {'notebooklm': mock_module}):
                 result = await exporter._upload_to_notebooklm("Topic", "# Document")
                 assert result is True

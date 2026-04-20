@@ -522,19 +522,47 @@ def expire_stale_drafts() -> int:
 # ---------------------------------------------------------------------------
 
 def get_users_with_reminders_due() -> list[dict]:
-    """Get users with active reminders (frequency != 'off')."""
+    """Get users whose reminders are currently due based on frequency + last_reminder_at.
+
+    daily: due if last_reminder_at is NULL or >24h ago
+    weekly: due if last_reminder_at is NULL or >7 days ago
+    """
     client = get_client()
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
     try:
         result = (
             client.table("users")
-            .select("tg_user_id, username, reminder_frequency, timezone, reminder_time")
+            .select("tg_user_id, username, reminder_frequency, timezone, reminder_time, last_reminder_at")
             .neq("reminder_frequency", "off")
             .execute()
         )
-        return result.data or []
+        due_users = []
+        for user in (result.data or []):
+            freq = user.get("reminder_frequency", "off")
+            last = user.get("last_reminder_at")
+            if last:
+                last_dt = datetime.fromisoformat(last)
+                if freq == "daily" and (now - last_dt) < timedelta(hours=23):
+                    continue  # not due yet
+                if freq == "weekly" and (now - last_dt) < timedelta(days=6, hours=23):
+                    continue  # not due yet
+            due_users.append(user)
+        return due_users
     except Exception as e:
         logger.error(f"Failed to get users with reminders: {e}")
         return []
+
+
+def update_last_reminder(tg_user_id: int) -> None:
+    """Update last_reminder_at to now after sending a reminder."""
+    client = get_client()
+    try:
+        client.table("users").update(
+            {"last_reminder_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("tg_user_id", tg_user_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to update last_reminder_at: {e}")
 
 
 def update_user_reminder(tg_user_id: int, frequency: str) -> None:

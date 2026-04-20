@@ -8,6 +8,7 @@ import html
 from telegram import Update
 from telegram.ext import ContextTypes
 
+import config
 import db
 import summarizer
 import personal
@@ -425,7 +426,7 @@ async def export_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def kb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /kb — link to NotebookLM notebook."""
-    notebook_id = getattr(__import__("config"), "NOTEBOOKLM_NOTEBOOK_ID", "")
+    notebook_id = config.NOTEBOOKLM_NOTEBOOK_ID
     if notebook_id:
         await update.message.reply_text(
             f"📚 Team Knowledge Base:\nhttps://notebooklm.google.com/notebook/{notebook_id}"

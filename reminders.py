@@ -51,6 +51,7 @@ async def check_and_send_reminders(bot: Bot) -> int:
             )
 
             await bot.send_message(chat_id=tg_user_id, text=digest)
+            db.update_last_reminder(tg_user_id)
             sent += 1
             logger.info(f"Reminder sent to {tg_user_id}: {total_new} new messages")
 

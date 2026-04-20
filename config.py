@@ -21,6 +21,11 @@ GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GOOGLE_CLOUD_PROJECT: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
 GOOGLE_CLOUD_LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
+# --- NotebookLM / Export ---
+NOTEBOOKLM_NOTEBOOK_ID: str = os.getenv("NOTEBOOKLM_NOTEBOOK_ID", "")
+GDRIVE_FOLDER_ID: str = os.getenv("GDRIVE_FOLDER_ID", "")
+GOOGLE_CREDENTIALS_PATH: str = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
+
 # --- Server ---
 HOST: str = os.getenv("HOST", "0.0.0.0")
 PORT: int = int(os.getenv("PORT", "8080"))
