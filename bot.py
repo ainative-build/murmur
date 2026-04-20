@@ -181,9 +181,15 @@ async def _process_links_and_store(
                 if i + MAX_TELEGRAM_MSG_LEN < len(formatted):
                     await asyncio.sleep(0.5)
 
-            # Schedule deletion after 1 hour
-            if sent_msgs:
-                asyncio.create_task(_delete_after(sent_msgs, delay_seconds=3600))
+            # Schedule deletion after 1 hour via PTB job queue
+            # (asyncio.create_task doesn't survive Cloud Run request lifecycle)
+            if sent_msgs and ptb_app and ptb_app.job_queue:
+                for sent in sent_msgs:
+                    ptb_app.job_queue.run_once(
+                        _delete_message_job,
+                        when=3600,
+                        data={"chat_id": sent.chat_id, "message_id": sent.message_id},
+                    )
         elif isinstance(agent_result, str):
             logger.error(f"Agent error for {urls[0]}: {agent_result}")
             # Give specific feedback based on error type
@@ -241,14 +247,13 @@ async def _analyze_image(message, context: ContextTypes.DEFAULT_TYPE) -> str | N
         return None
 
 
-async def _delete_after(messages: list, delay_seconds: int = 3600) -> None:
-    """Delete messages after a delay. Used for auto-cleaning summaries from group chat."""
-    await asyncio.sleep(delay_seconds)
-    for msg in messages:
-        try:
-            await msg.delete()
-        except Exception as e:
-            logger.debug(f"Could not delete message {msg.message_id}: {e}")
+async def _delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """PTB job callback: delete a single message. Scheduled via job_queue.run_once."""
+    data = context.job.data
+    try:
+        await context.bot.delete_message(chat_id=data["chat_id"], message_id=data["message_id"])
+    except Exception as e:
+        logger.debug(f"Could not delete message {data['message_id']}: {e}")
 
 
 def _detect_link_type(url: str) -> str:
