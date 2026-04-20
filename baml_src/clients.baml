@@ -1,40 +1,39 @@
-// Gemini 3 clients (v1 choice — model swaps are a config change)
+// Gemini 3 clients with retry + fallback chain
 client<llm> Gemini3Flash {
   provider google-ai
+  retry_policy Exponential
   options {
     model gemini-3-flash-preview
+    api_key env.GEMINI_API_KEY
+  }
+}
+
+client<llm> Gemini3FlashLite {
+  provider google-ai
+  retry_policy Exponential
+  options {
+    model gemini-3.1-flash-lite-preview
     api_key env.GEMINI_API_KEY
   }
 }
 
 client<llm> Gemini3Pro {
   provider google-ai
+  retry_policy Exponential
   options {
     model gemini-3.1-pro-preview
     api_key env.GEMINI_API_KEY
   }
 }
 
-client<llm> DeepSeekV3 {
-  provider "openai"
-  options {
-    api_key env.DEEPSEEK_API_KEY
-    base_url "https://api.deepseek.com"
-    model "deepseek-chat"
-    temperature 0.1
-  }
-}
-
-// Use Gemini 3 Flash directly — DeepSeek removed (no valid key in production)
+// Fallback: Flash → Flash-Lite (handles 503 overload gracefully)
 client<llm> LLMFallback {
-  provider google-ai
+  provider fallback
   options {
-    model gemini-3-flash-preview
-    api_key env.GEMINI_API_KEY
+    strategy [Gemini3Flash, Gemini3FlashLite]
   }
 }
 
-// https://docs.boundaryml.com/docs/snippets/clients/retry
 retry_policy Constant {
   max_retries 3
   strategy {
@@ -44,11 +43,11 @@ retry_policy Constant {
 }
 
 retry_policy Exponential {
-  max_retries 2
+  max_retries 3
   strategy {
     type exponential_backoff
-    delay_ms 300
-    multiplier 1.5
-    max_delay_ms 10000
+    delay_ms 1000
+    multiplier 2
+    max_delay_ms 15000
   }
 }
