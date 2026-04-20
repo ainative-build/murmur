@@ -238,12 +238,24 @@ def get_twitter_content(state: AgentState) -> Dict[str, Any]:
 
             # If tweet is mostly a link with little text, follow the embedded URL
             import re as _re
+            import requests as _requests
             embedded_urls = _re.findall(r'https?://t\.co/\S+|https?://(?!x\.com|twitter\.com)\S+', content_result)
             tweet_text_only = _re.sub(r'https?://\S+', '', content_result).strip()
             if embedded_urls and len(tweet_text_only) < 100:
-                console.print(f"Tweet is mostly a link — extracting linked content: {embedded_urls[0]}", style="cyan")
+                # Resolve t.co redirects to get the actual URL
+                target_url = embedded_urls[0]
+                if "t.co/" in target_url:
+                    try:
+                        resp = _requests.head(target_url, allow_redirects=True, timeout=5)
+                        target_url = resp.url
+                        console.print(f"Resolved t.co → {target_url}", style="cyan")
+                    except Exception:
+                        pass
+
+                console.print(f"Tweet is mostly a link — extracting: {target_url}", style="cyan")
+                extracted = False
                 try:
-                    link_content = run_tavily_tool(mode="extract", urls=[embedded_urls[0]])
+                    link_content = run_tavily_tool(mode="extract", urls=[target_url])
                     results_list = link_content.get("results", []) if isinstance(link_content, dict) else []
                     if results_list:
                         raw = results_list[0].get("raw_content") or results_list[0].get("content", "")
@@ -251,9 +263,21 @@ def get_twitter_content(state: AgentState) -> Dict[str, Any]:
                             raw = raw.get("text", str(raw))
                         if raw and len(raw) > 100:
                             content_result = f"Tweet by {content_result}\n\n--- Linked Content ---\n{raw[:10000]}"
-                            console.print(f"Extracted {len(raw)} chars from linked URL", style="green")
+                            console.print(f"Tavily extracted {len(raw)} chars from linked URL", style="green")
+                            extracted = True
                 except Exception as link_err:
-                    console.print(f"Could not extract linked content: {link_err}", style="yellow")
+                    console.print(f"Tavily failed for linked URL: {link_err}", style="yellow")
+
+                # Fallback to Playwright if Tavily didn't get content
+                if not extracted:
+                    try:
+                        from tools.playwright_fallback import extract_page_text
+                        pw_text = extract_page_text(target_url)
+                        if pw_text and len(pw_text) > 100:
+                            content_result = f"Tweet by {content_result}\n\n--- Linked Content ---\n{pw_text}"
+                            console.print(f"Playwright extracted {len(pw_text)} chars from linked URL", style="green")
+                    except Exception as pw_err:
+                        console.print(f"Playwright fallback failed: {pw_err}", style="yellow")
 
     except Exception as e:
         console.print(
