@@ -25,12 +25,12 @@ client<llm> DeepSeekV3 {
   }
 }
 
-// https://docs.boundaryml.com/docs/snippets/clients/fallback
+// Use Gemini 3 Flash directly — DeepSeek removed (no valid key in production)
 client<llm> LLMFallback {
-  provider fallback
+  provider google-ai
   options {
-    // Gemini 3 Flash first, DeepSeek V3 as fallback
-    strategy [Gemini3Flash, DeepSeekV3]
+    model gemini-3-flash-preview
+    api_key env.GEMINI_API_KEY
   }
 }
 
