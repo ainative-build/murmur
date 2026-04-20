@@ -405,11 +405,11 @@ def get_messages_by_keyword(
             .eq("tg_chat_id", tg_chat_id)
             .gt("timestamp", since.isoformat())
             .text_search("search_vector", keyword)
-            .order("timestamp", desc=False)
-            .limit(limit)
             .execute()
         )
-        return result.data or []
+        # text_search() breaks .order()/.limit() chain in supabase-py — sort in Python
+        data = sorted((result.data or []), key=lambda m: m.get("timestamp", ""))
+        return data[:limit]
     except Exception as e:
         logger.error(f"Failed to search messages by keyword: {e}")
         return []

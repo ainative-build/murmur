@@ -408,18 +408,56 @@ async def remind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ---------------------------------------------------------------------------
 
 async def export_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /export — manual trigger for NotebookLM export."""
-    await update.message.reply_text("⏳ Exporting topics to NotebookLM...")
+    """Handle /export — generate topic markdown files and send them in chat."""
+    tg_user_id = update.effective_user.id
+    chats = db.get_user_chats(tg_user_id)
+    if not chats:
+        await update.message.reply_text("I haven't seen you in any groups yet.")
+        return
+
+    await update.message.reply_text("⏳ Generating topic exports...")
 
     try:
-        from exporter import export_topics
-        count = await export_topics()
-        if count > 0:
-            await update.message.reply_text(f"✅ Exported {count} topic(s) to NotebookLM.")
-        else:
-            await update.message.reply_text("No new content to export (all up to date).")
-    except ImportError:
-        await update.message.reply_text("⚠️ NotebookLM export not yet configured.")
+        import io
+        from export_formatter import format_topic_document, content_hash
+
+        tg_chat_id = chats[0]["tg_chat_id"]
+        messages = db.get_recent_messages(tg_chat_id, hours=48)
+        if not messages:
+            await update.message.reply_text("No messages in the last 48 hours to export.")
+            return
+
+        topics = await summarizer.generate_topics(messages)
+        if not topics:
+            await update.message.reply_text("Couldn't identify topics to export.")
+            return
+
+        sent = 0
+        for topic_data in topics:
+            topic_name = topic_data.get("name", "Untitled")
+            topic_messages = db.get_messages_by_keyword(tg_chat_id, topic_name, hours=72)
+            if not topic_messages:
+                topic_messages = messages
+
+            msg_ids = [m["id"] for m in topic_messages if m.get("has_links")]
+            links = db.get_link_summaries_for_messages(msg_ids)
+
+            doc = format_topic_document(
+                topic=topic_name,
+                messages=topic_messages,
+                links=links,
+                summary=topic_data.get("description", ""),
+            )
+
+            # Send as .md file in chat
+            safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in topic_name)
+            file_bytes = io.BytesIO(doc.encode("utf-8"))
+            file_bytes.name = f"{safe_name}.md"
+            await update.message.reply_document(document=file_bytes, filename=f"{safe_name}.md")
+            sent += 1
+
+        await update.message.reply_text(f"✅ Exported {sent} topic(s) as markdown files.")
+
     except Exception as e:
         logger.error(f"Export failed: {e}")
         await update.message.reply_text(f"❌ Export failed: {e}")
