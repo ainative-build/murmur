@@ -159,17 +159,23 @@ async def _process_links_and_store(
                     summary=agent_result,
                 )
 
-            # Send as plain text — BAML output has markdown syntax (#, **, etc.)
-            # that Telegram's Markdown parser chokes on. Plain text is readable enough.
+            # Send as plain text, schedule auto-delete after 1 hour.
+            # Summary is persisted in Supabase — group chat stays clean.
+            sent_msgs = []
             for i in range(0, len(agent_result), MAX_TELEGRAM_MSG_LEN):
                 raw_chunk = agent_result[i:i + MAX_TELEGRAM_MSG_LEN]
                 try:
-                    await message.reply_text(raw_chunk)
+                    sent = await message.reply_text(raw_chunk)
+                    sent_msgs.append(sent)
                 except Exception as e:
                     logger.error(f"Failed to send chunk: {e}")
                     break
                 if i + MAX_TELEGRAM_MSG_LEN < len(agent_result):
                     await asyncio.sleep(0.5)
+
+            # Schedule deletion after 1 hour
+            if sent_msgs:
+                asyncio.create_task(_delete_after(sent_msgs, delay_seconds=3600))
         elif isinstance(agent_result, str):
             logger.error(f"Agent error for {urls[0]}: {agent_result}")
             # Let users know the link couldn't be processed
@@ -181,6 +187,16 @@ async def _process_links_and_store(
 
     except Exception as e:
         logger.error(f"Error processing links: {e}", exc_info=True)
+
+
+async def _delete_after(messages: list, delay_seconds: int = 3600) -> None:
+    """Delete messages after a delay. Used for auto-cleaning summaries from group chat."""
+    await asyncio.sleep(delay_seconds)
+    for msg in messages:
+        try:
+            await msg.delete()
+        except Exception as e:
+            logger.debug(f"Could not delete message {msg.message_id}: {e}")
 
 
 def _detect_link_type(url: str) -> str:
