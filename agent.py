@@ -173,10 +173,20 @@ def get_web_content(state: AgentState) -> Dict[str, Any]:
             if not content_source:
                 content_source = ""
 
-        # If after trying extract, we still have no content and no specific error, set a generic one
-        if not content_source and not error_message:
-            error_message = "Tavily extract did not return any content for the URL."
-            console.print(error_message, style="red")
+        # If Tavily failed, try Playwright fallback (JS-rendered pages like Grok)
+        if not content_source:
+            console.print("Tavily returned no content — trying Playwright fallback...", style="yellow")
+            try:
+                from tools.playwright_fallback import extract_page_text
+                pw_text = extract_page_text(url)
+                if pw_text:
+                    content_source = f"URL: {url}\nRaw Content: {pw_text}\n"
+                    error_message = None  # Clear error since fallback succeeded
+                else:
+                    error_message = error_message or f"Both Tavily and Playwright failed to extract content from {url}"
+            except Exception as pw_err:
+                console.print(f"Playwright fallback error: {pw_err}", style="red")
+                error_message = error_message or f"Tavily and Playwright both failed for {url}"
 
     except Exception as e:
         console.print(f"Error getting content from URL {url}: {e}", style="red bold")
