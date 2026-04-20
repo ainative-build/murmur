@@ -66,7 +66,8 @@ jobs:
             --allow-unauthenticated \
             --memory=1024Mi \
             --min-instances=1 \
-            --cpu-throttling \
+            --no-cpu-throttling \
+            --cpu=1 \
             --set-secrets="\
               TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,\
               TELEGRAM_WEBHOOK_SECRET_TOKEN=TELEGRAM_WEBHOOK_SECRET_TOKEN:latest,\
