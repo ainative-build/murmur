@@ -12,33 +12,47 @@ logger = logging.getLogger(__name__)
 URL_REGEX = r"(https?:\/\/[^\s]+)"
 
 
+def _needs_tinyfish(url: str) -> bool:
+    """Check if URL needs TinyFish extraction (login-walled, JS-heavy, or no BAML route)."""
+    url_lower = url.lower()
+    return (
+        "grok.com" in url_lower
+        or "github.com" in url_lower
+        # X Articles (long-form posts that require login)
+        or ("/article/" in url_lower and ("x.com" in url_lower or "twitter.com" in url_lower))
+    )
+
+
 async def extract_link_summary(url: str, original_text: str) -> Optional[str]:
     """Extract and summarize a link — returns summary text, no storage.
 
-    Routes by link type: Grok → TinyFish, Spotify → API/oEmbed, rest → BAML agent.
+    Routes: TinyFish-eligible → TinyFish+BAML, Spotify → API/oEmbed, rest → BAML agent.
     """
     try:
         url_lower = url.lower()
-        logger.info(f"extract_link_summary: url={url[:60]}, type={'grok' if 'grok.com' in url_lower else 'spotify' if 'spotify.com' in url_lower else 'agent'}")
+        logger.info(f"extract_link_summary: url={url[:60]}")
 
-        if "grok.com" in url_lower:
-            result = await _extract_grok_link(url)
-            logger.info(f"Grok extraction result: {len(result) if result else 0} chars")
-            return result
+        # Grok, GitHub, X Articles → TinyFish extraction + BAML summarization
+        if _needs_tinyfish(url):
+            return await _extract_via_tinyfish(url)
+        # Spotify → Web API / oEmbed
         elif "spotify.com" in url_lower:
             return _extract_spotify_link(url)
+        # Everything else → BAML agent pipeline
         else:
             agent_result = await run_agent(original_text)
             if isinstance(agent_result, str) and not agent_result.startswith("Error:"):
                 return agent_result
-            return None
+            # Agent failed — try TinyFish as last resort
+            logger.info(f"Agent failed, trying TinyFish fallback for {url[:60]}")
+            return await _extract_via_tinyfish(url)
     except Exception as e:
         logger.error(f"Link extraction failed: {type(e).__name__}: {e}", exc_info=True)
         return None
 
 
-async def _extract_grok_link(url: str) -> Optional[str]:
-    """Extract Grok conversation via TinyFish and summarize with BAML."""
+async def _extract_via_tinyfish(url: str) -> Optional[str]:
+    """Extract content via TinyFish and summarize with BAML."""
     try:
         from tools.tinyfish_fetcher import fetch_url_content
         from baml_client import b
@@ -46,14 +60,15 @@ async def _extract_grok_link(url: str) -> Optional[str]:
 
         content = await fetch_url_content(url)
         if not content or len(content) < 100:
+            logger.warning(f"TinyFish returned insufficient content for {url[:60]}")
             return None
 
         result = b.SummarizeContent(
             content=content,
             content_type=ContentType.Webpage,
-            context=f"Grok AI conversation from {url}",
+            context=f"Content from {url}",
         )
-        title = getattr(result, "title", "Grok Conversation")
+        title = getattr(result, "title", "Summary")
         key_points = getattr(result, "key_points", [])
         concise_summary = getattr(result, "concise_summary", "")
 
@@ -64,10 +79,12 @@ async def _extract_grok_link(url: str) -> Optional[str]:
                 formatted += f"- {point}\n"
             formatted += "\n"
         formatted += f"## Summary:\n{concise_summary}"
+        logger.info(f"TinyFish+BAML summary: {len(formatted)} chars for {url[:60]}")
         return formatted
     except Exception as e:
-        logger.error(f"Grok DM extraction failed: {e}")
+        logger.error(f"TinyFish extraction failed: {type(e).__name__}: {e}")
         return None
+
 
 
 def _extract_spotify_link(url: str) -> Optional[str]:
