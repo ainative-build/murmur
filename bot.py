@@ -49,6 +49,10 @@ MAX_TELEGRAM_MSG_LEN = 4096
 # PTB app constructed lazily in lifespan, not at import time
 ptb_app: Optional[Application] = None
 
+# Dedup: track message IDs currently being processed to prevent webhook retry duplicates.
+# Telegram retries webhooks if response is slow (>~30s), causing double processing.
+_processing_messages: set[tuple[int, int]] = set()  # (tg_chat_id, tg_msg_id)
+
 
 def _register_handlers(app: Application) -> None:
     """Register all handlers on a PTB Application. Single source of truth."""
@@ -112,6 +116,13 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     tg_msg_id = message.message_id
     timestamp = message.date or datetime.now(timezone.utc)
 
+    # Dedup: skip if this message is already being processed (webhook retry)
+    msg_key = (tg_chat_id, tg_msg_id)
+    if msg_key in _processing_messages:
+        logger.debug(f"Skipping duplicate webhook for msg {tg_msg_id} in chat {tg_chat_id}")
+        return
+    _processing_messages.add(msg_key)
+
     # Get text — could be message.text or message.caption (for photos/docs)
     text = message.text or message.caption or ""
     media_type = None
@@ -169,13 +180,17 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     db.upsert_user(tg_user_id, username)
     db.ensure_user_chat_state(tg_user_id, tg_chat_id)
 
-    if has_links:
-        await _process_links_and_store(message, text, urls, message_id)
+    try:
+        if has_links:
+            await _process_links_and_store(message, text, urls, message_id)
 
-    # Auto-summarize file attachments (not voice — voice is silent)
-    # Only if extracted text is 1K-10K chars (sweet spot for summarization)
-    if media_type == "file" and file_text and 1000 < len(file_text) < 10000:
-        await _summarize_and_reply_file(message, file_text, source_filename)
+        # Auto-summarize file attachments (not voice — voice is silent)
+        # Only if extracted text is 1K-10K chars (sweet spot for summarization)
+        if media_type == "file" and file_text and 1000 < len(file_text) < 10000:
+            await _summarize_and_reply_file(message, file_text, source_filename)
+    finally:
+        # Clean up dedup set (allow reprocessing if message is sent again later)
+        _processing_messages.discard(msg_key)
 
 
 def _handle_spotify_link(url: str) -> str:
