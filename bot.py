@@ -299,7 +299,7 @@ async def _process_links_and_store(
             # Schedule deletion after 1 hour via Supabase (survives container restarts)
             if sent_msgs:
                 from datetime import timedelta
-                delete_after = datetime.now(timezone.utc) + timedelta(hours=1)
+                delete_after = datetime.now(timezone.utc) + timedelta(hours=24)
                 for sent in sent_msgs:
                     db.schedule_message_deletion(sent.chat_id, sent.message_id, delete_after)
         elif isinstance(agent_result, str):
@@ -455,7 +455,7 @@ async def _summarize_and_reply_file(message, file_text: str, filename: str) -> N
         # Schedule auto-delete after 1 hour via Supabase (survives container restarts)
         if sent_msgs:
             from datetime import timedelta
-            delete_after = datetime.now(timezone.utc) + timedelta(hours=1)
+            delete_after = datetime.now(timezone.utc) + timedelta(hours=24)
             for sent in sent_msgs:
                 db.schedule_message_deletion(sent.chat_id, sent.message_id, delete_after)
     except Exception as e:

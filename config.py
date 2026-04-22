@@ -29,7 +29,8 @@ GOOGLE_CREDENTIALS_PATH: str = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
 # --- TinyFish ---
 TINYFISH_API_KEY: str = os.getenv("TINYFISH_API_KEY", "")
 
-# --- Spotify ---
+# --- Spotify (optional — requires Spotify Developer premium for Web API) ---
+# Without these: oEmbed fallback gives title + type (no episode descriptions)
 SPOTIFY_CLIENT_ID: str = os.getenv("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET: str = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 
