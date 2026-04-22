@@ -215,6 +215,7 @@ async def _handle_grok_link(url: str) -> str:
     from baml_client.types import ContentType
 
     content = await fetch_url_content(url)
+    logger.info(f"Grok TinyFish result: {len(content) if content else 0} chars")
     if not content or len(content) < 100:
         return "Error: Could not extract content from Grok link."
 
@@ -251,6 +252,8 @@ async def _process_links_and_store(
     try:
         url = urls[0]
         link_type = _detect_link_type(url)
+
+        logger.info(f"Processing link: type={link_type}, url={url[:80]}")
 
         # Grok links: TinyFish pre-agent (no BAML route for Grok)
         if link_type == "grok":
