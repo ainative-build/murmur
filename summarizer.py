@@ -133,7 +133,7 @@ Rules:
 - Mention shared links with brief description
 - Format each topic as: "TOPIC NAME\nSummary with @username attributions\n"
 - If links were shared, add: 🔗 link title/description
-- Keep total digest under 2000 chars
+- Keep total digest under 4000 chars
 - Write in the same language as the messages
 - Do NOT use markdown formatting (no #, *, **, ```, etc.) — use plain text only
 """
@@ -164,7 +164,7 @@ async def generate_catchup(messages: list[dict], link_summaries: list[dict]) -> 
         text = await _generate_with_resilience(
             contents=prompt,
             system_instruction=CATCHUP_SYSTEM,
-            max_output_tokens=2048,
+            max_output_tokens=4096,
         )
         return text or "No digest generated."
     except Exception as e:
