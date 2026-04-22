@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 MAX_MSG_LEN = 4096
 URL_REGEX = r"(https?:\/\/[^\s]+)"
 
+# Dedup: prevent duplicate processing from Telegram webhook retries
+_processing_dm: set[tuple[int, int]] = set()  # (tg_user_id, tg_msg_id)
+
 
 async def _send_long(update: Update, text: str, parse_mode: str | None = "HTML") -> None:
     """Send a long message, chunking if needed. Falls back to plain text on parse failure."""
@@ -337,37 +340,47 @@ async def dm_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     tg_user_id = update.effective_user.id
+    tg_msg_id = message.message_id
     text = message.text
 
-    # Check for forwarded message
-    if message.forward_origin:
-        forwarded_from = None
-        if hasattr(message.forward_origin, "sender_user") and message.forward_origin.sender_user:
-            forwarded_from = message.forward_origin.sender_user.username
-        source_id = personal.handle_dm_forward(tg_user_id, text, forwarded_from)
-        if source_id:
-            await message.reply_text(f"✅ Forwarded message saved (#{source_id})")
-        else:
-            await message.reply_text("❌ Failed to save. Try again.")
+    # Dedup: skip webhook retries for messages already being processed
+    dm_key = (tg_user_id, tg_msg_id)
+    if dm_key in _processing_dm:
         return
+    _processing_dm.add(dm_key)
 
-    # Check for links — extract + show summary (don't auto-save)
-    urls = personal.detect_urls(text)
-    if urls:
-        await message.reply_text("⏳ Processing link...")
-        summary = await personal.extract_link_summary(urls[0], text)
-        if summary:
-            await _send_llm_response(update, summary)
-        else:
-            await message.reply_text("⚠️ Couldn't extract content from this link.")
-        return
+    try:
+        # Check for forwarded message
+        if message.forward_origin:
+            forwarded_from = None
+            if hasattr(message.forward_origin, "sender_user") and message.forward_origin.sender_user:
+                forwarded_from = message.forward_origin.sender_user.username
+            source_id = personal.handle_dm_forward(tg_user_id, text, forwarded_from)
+            if source_id:
+                await message.reply_text(f"✅ Forwarded message saved (#{source_id})")
+            else:
+                await message.reply_text("❌ Failed to save. Try again.")
+            return
 
-    # Plain text — prompt for /note
-    await message.reply_text(
-        "To save this as a personal note, use:\n/note " + html.escape(text[:50]) + "..."
-        if len(text) > 50 else
-        "To save this as a personal note, use:\n/note " + html.escape(text)
-    )
+        # Check for links — extract + show summary (don't auto-save)
+        urls = personal.detect_urls(text)
+        if urls:
+            await message.reply_text("⏳ Processing link...")
+            summary = await personal.extract_link_summary(urls[0], text)
+            if summary:
+                await _send_llm_response(update, summary)
+            else:
+                await message.reply_text("⚠️ Couldn't extract content from this link.")
+            return
+
+        # Plain text — prompt for /note
+        await message.reply_text(
+            "To save this as a personal note, use:\n/note " + html.escape(text[:50]) + "..."
+            if len(text) > 50 else
+            "To save this as a personal note, use:\n/note " + html.escape(text)
+        )
+    finally:
+        _processing_dm.discard(dm_key)
 
 
 # ---------------------------------------------------------------------------
