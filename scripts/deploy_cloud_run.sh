@@ -95,7 +95,9 @@ gcloud auth configure-docker "${REGION}-docker.pkg.dev" --project="$PROJECT_ID"
 # Build the Docker image
 echo "Building Docker image '$IMAGE_NAME' from $PROJECT_ROOT..."
 cd "$PROJECT_ROOT" || exit 1
-docker build -t "$IMAGE_NAME" .
+# Force linux/amd64 — Cloud Run is amd64; building on Apple Silicon would
+# otherwise produce arm64 binaries that fail at startup with "exec format error".
+docker build --platform=linux/amd64 -t "$IMAGE_NAME" .
 if [ $? -ne 0 ]; then echo "Error: Docker build failed." >&2; exit 1; fi
 
 # Push the Docker image
