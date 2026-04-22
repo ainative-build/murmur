@@ -4,11 +4,13 @@ Uses API key locally, Vertex AI on Cloud Run (auto-detected via config.IS_CLOUD_
 All calls async via .aio for non-blocking Telegram bot.
 """
 
+import asyncio
 import json
 import logging
 from typing import Optional
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 import config
@@ -21,6 +23,15 @@ _genai_client: Optional[genai.Client] = None
 # Model IDs
 MODEL_FLASH = "gemini-3-flash-preview"
 MODEL_PRO = "gemini-3.1-pro-preview"
+
+# Resilience tunables
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 1.0  # seconds; doubled each attempt → 1s, 2s, 4s
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+_USER_FACING_UNAVAILABLE = (
+    "Sorry, I couldn't generate a digest right now — Gemini is temporarily "
+    "overloaded. Please try again in a minute."
+)
 
 
 def get_genai_client() -> genai.Client:
@@ -44,6 +55,71 @@ def get_genai_client() -> genai.Client:
     return _genai_client
 
 
+def _is_retryable(exc: BaseException) -> bool:
+    """True if the exception is a transient Gemini error worth retrying."""
+    # google-genai raises ServerError (5xx) and ClientError (4xx) with .code
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if isinstance(code, int) and code in _RETRYABLE_STATUSES:
+        return True
+    # Last-resort string sniff for SDKs that don't expose .code cleanly
+    msg = str(exc).upper()
+    return "UNAVAILABLE" in msg or "RESOURCE_EXHAUSTED" in msg or " 503" in msg or " 429" in msg
+
+
+async def _generate_with_resilience(
+    *,
+    contents,
+    system_instruction: str,
+    max_output_tokens: int,
+    response_mime_type: Optional[str] = None,
+    models: tuple[str, ...] = (MODEL_FLASH, MODEL_PRO),
+) -> str:
+    """Call Gemini with exponential backoff on transient errors and model fallback.
+
+    Tries each model in order; for each, retries up to _RETRY_ATTEMPTS times on
+    503/429/etc. with exponential backoff. Falls back to the next model only
+    after exhausting retries on a transient error. Non-retryable errors abort
+    the current model and move on to the fallback. Returns response.text on
+    success; raises the last exception if every attempt fails.
+    """
+    client = get_genai_client()
+    cfg_kwargs = {
+        "system_instruction": system_instruction,
+        "max_output_tokens": max_output_tokens,
+    }
+    if response_mime_type:
+        cfg_kwargs["response_mime_type"] = response_mime_type
+    cfg = types.GenerateContentConfig(**cfg_kwargs)
+
+    last_exc: Optional[BaseException] = None
+    for model in models:
+        for attempt in range(_RETRY_ATTEMPTS):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=cfg,
+                )
+                return response.text or ""
+            except Exception as exc:  # noqa: BLE001 — SDK raises various error types
+                last_exc = exc
+                if _is_retryable(exc) and attempt < _RETRY_ATTEMPTS - 1:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"Gemini {model} transient error (attempt {attempt+1}/"
+                        f"{_RETRY_ATTEMPTS}), retrying in {delay}s: {exc}"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.warning(
+                    f"Gemini {model} failed (attempt {attempt+1}): {exc}"
+                )
+                break  # Non-retryable or out of retries → try next model
+        if len(models) > 1:
+            logger.info(f"Falling back from {model} to next model")
+    raise last_exc if last_exc else RuntimeError("Gemini call failed with no exception")
+
+
 # ---------------------------------------------------------------------------
 # Phase 2: Catchup digest
 # ---------------------------------------------------------------------------
@@ -65,8 +141,6 @@ Rules:
 
 async def generate_catchup(messages: list[dict], link_summaries: list[dict]) -> str:
     """Generate a catch-up digest from group messages and link summaries."""
-    client = get_genai_client()
-
     # Build context from messages
     msg_lines = []
     for m in messages:
@@ -87,18 +161,17 @@ async def generate_catchup(messages: list[dict], link_summaries: list[dict]) -> 
         prompt += f"\n\nShared links ({len(link_lines)}):\n" + "\n".join(link_lines)
 
     try:
-        response = await client.aio.models.generate_content(
-            model=MODEL_FLASH,
+        text = await _generate_with_resilience(
             contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=CATCHUP_SYSTEM,
-                max_output_tokens=2048,
-            ),
+            system_instruction=CATCHUP_SYSTEM,
+            max_output_tokens=2048,
         )
-        return response.text or "No digest generated."
+        return text or "No digest generated."
     except Exception as e:
-        logger.error(f"Catchup generation failed: {e}")
-        return f"Sorry, I couldn't generate a digest right now. Error: {e}"
+        logger.error(f"Catchup generation failed after retries+fallback: {e}")
+        # User-friendly: don't expose raw API JSON. Phrase kept stable so
+        # existing tests that match "couldn't generate a digest" still pass.
+        return _USER_FACING_UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +191,6 @@ Rules:
 
 async def generate_topics(messages: list[dict]) -> list[dict]:
     """Identify discussion topics from recent messages. Returns structured topic list."""
-    client = get_genai_client()
-
     msg_lines = []
     for m in messages:
         user = m.get("username") or f"user_{m.get('tg_user_id', '?')}"
@@ -127,22 +198,20 @@ async def generate_topics(messages: list[dict]) -> list[dict]:
 
     prompt = f"Messages ({len(messages)} total):\n" + "\n".join(msg_lines[-200:])
 
+    raw = ""
     try:
-        response = await client.aio.models.generate_content(
-            model=MODEL_FLASH,
+        raw = await _generate_with_resilience(
             contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=TOPICS_SYSTEM,
-                response_mime_type="application/json",
-                max_output_tokens=2048,
-            ),
+            system_instruction=TOPICS_SYSTEM,
+            max_output_tokens=2048,
+            response_mime_type="application/json",
         )
-        return json.loads(response.text or "[]")
+        return json.loads(raw or "[]")
     except json.JSONDecodeError:
-        logger.error(f"Topics JSON parse failed: {response.text[:200] if response else 'no response'}")
+        logger.error(f"Topics JSON parse failed: {raw[:200]}")
         return []
     except Exception as e:
-        logger.error(f"Topics generation failed: {e}")
+        logger.error(f"Topics generation failed after retries+fallback: {e}")
         return []
 
 
@@ -164,8 +233,6 @@ async def generate_topic_detail(
     messages: list[dict], links: list[dict], topic_name: str
 ) -> str:
     """Generate detailed synthesis of a specific topic with citations."""
-    client = get_genai_client()
-
     msg_lines = [
         f"[{m.get('timestamp', '')[:16]} {m.get('username', '?')}]: {m.get('text', '')}"
         for m in messages
@@ -180,18 +247,18 @@ async def generate_topic_detail(
         prompt += "\n\nRelated links:\n" + "\n".join(link_lines)
 
     try:
-        response = await client.aio.models.generate_content(
-            model=MODEL_FLASH,
+        text = await _generate_with_resilience(
             contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=TOPIC_DETAIL_SYSTEM,
-                max_output_tokens=3072,
-            ),
+            system_instruction=TOPIC_DETAIL_SYSTEM,
+            max_output_tokens=3072,
         )
-        return response.text or "No detail generated."
+        return text or "No detail generated."
     except Exception as e:
-        logger.error(f"Topic detail generation failed: {e}")
-        return f"Sorry, I couldn't generate topic detail. Error: {e}"
+        logger.error(f"Topic detail generation failed after retries+fallback: {e}")
+        return (
+            "Sorry, I couldn't generate topic detail right now — Gemini is "
+            "temporarily overloaded. Please try again in a minute."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +291,6 @@ async def generate_decision_view(
     messages: list[dict], links: list[dict], topic: str
 ) -> str:
     """Generate structured decision view with citations."""
-    client = get_genai_client()
-
     msg_lines = [
         f"[{m.get('timestamp', '')[:16]} {m.get('username', '?')}]: {m.get('text', '')}"
         for m in messages
@@ -240,18 +305,18 @@ async def generate_decision_view(
         prompt += "\n\nShared evidence:\n" + "\n".join(link_lines)
 
     try:
-        response = await client.aio.models.generate_content(
-            model=MODEL_FLASH,
+        text = await _generate_with_resilience(
             contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=DECIDE_SYSTEM,
-                max_output_tokens=3072,
-            ),
+            system_instruction=DECIDE_SYSTEM,
+            max_output_tokens=3072,
         )
-        return response.text or "No decision view generated."
+        return text or "No decision view generated."
     except Exception as e:
-        logger.error(f"Decision view generation failed: {e}")
-        return f"Sorry, I couldn't generate a decision view. Error: {e}"
+        logger.error(f"Decision view generation failed after retries+fallback: {e}")
+        return (
+            "Sorry, I couldn't generate a decision view right now — Gemini is "
+            "temporarily overloaded. Please try again in a minute."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -278,9 +343,6 @@ async def generate_draft_response(
     conversation_history: list[dict], system_prompt: str
 ) -> str:
     """Generate a draft response in multi-turn conversation using Gemini 3.1 Pro."""
-    client = get_genai_client()
-
-    # Build contents list for multi-turn
     contents = []
     for msg in conversation_history:
         role = "user" if msg["role"] == "user" else "model"
@@ -289,23 +351,17 @@ async def generate_draft_response(
             parts=[types.Part(text=msg["content"])],
         ))
 
-    # Try Pro first, fallback to Flash if Pro is unavailable (503)
-    for model in [MODEL_PRO, MODEL_FLASH]:
-        try:
-            response = await client.aio.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    max_output_tokens=1024,
-                ),
-            )
-            return response.text or "..."
-        except Exception as e:
-            logger.warning(f"Draft generation with {model} failed: {e}")
-            if model == MODEL_FLASH:
-                return f"Sorry, I had trouble generating a response. Please try again later."
-    return "Sorry, all models are temporarily unavailable. Please try again later."
+    try:
+        text = await _generate_with_resilience(
+            contents=contents,
+            system_instruction=system_prompt,
+            max_output_tokens=1024,
+            models=(MODEL_PRO, MODEL_FLASH),  # Pro preferred for nuanced drafting
+        )
+        return text or "..."
+    except Exception as e:
+        logger.error(f"Draft generation failed after retries+fallback: {e}")
+        return "Sorry, I had trouble generating a response. Please try again later."
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +382,6 @@ async def generate_reminder_digest(
     message_count: int, topic_names: list[str], stale_topics: list[str]
 ) -> str:
     """Generate a brief reminder digest for DM."""
-    client = get_genai_client()
-
     prompt = (
         f"New messages: {message_count}\n"
         f"Active topics: {', '.join(topic_names) if topic_names else 'none identified'}\n"
@@ -335,15 +389,12 @@ async def generate_reminder_digest(
     )
 
     try:
-        response = await client.aio.models.generate_content(
-            model=MODEL_FLASH,
+        text = await _generate_with_resilience(
             contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=REMINDER_SYSTEM,
-                max_output_tokens=512,
-            ),
+            system_instruction=REMINDER_SYSTEM,
+            max_output_tokens=512,
         )
-        return response.text or f"📬 {message_count} new messages. Use /catchup for details."
+        return text or f"📬 {message_count} new messages. Use /catchup for details."
     except Exception as e:
-        logger.error(f"Reminder digest generation failed: {e}")
+        logger.error(f"Reminder digest generation failed after retries+fallback: {e}")
         return f"📬 {message_count} new messages. Use /catchup for details."

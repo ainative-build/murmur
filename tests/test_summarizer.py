@@ -144,6 +144,82 @@ class TestGenerateCatchup:
             messages = [{"username": "user", "text": "test", "timestamp": "2024-01-15T10:30:00", "tg_user_id": 789}]
             result = await summarizer.generate_catchup(messages, [])
             assert "couldn't generate a digest" in result
+            # Friendly: must NOT leak raw API status codes/JSON to the user
+            assert "503" not in result
+            assert "UNAVAILABLE" not in result
+
+    @pytest.mark.asyncio
+    async def test_generate_catchup_retries_on_503_then_succeeds(self):
+        """503 UNAVAILABLE on first attempt → retry → success on second attempt."""
+        mock_client = Mock()
+        good = Mock()
+        good.text = "Recovered digest"
+
+        class FakeServerError(Exception):
+            def __init__(self):
+                super().__init__("503 UNAVAILABLE")
+                self.code = 503
+
+        mock_client.aio.models.generate_content = AsyncMock(
+            side_effect=[FakeServerError(), good]
+        )
+
+        with patch('summarizer.get_genai_client', return_value=mock_client), \
+             patch('summarizer.asyncio.sleep', new=AsyncMock()):  # skip backoff
+            messages = [{"username": "u", "text": "hi", "timestamp": "2024-01-15T10:30:00", "tg_user_id": 1}]
+            result = await summarizer.generate_catchup(messages, [])
+            assert result == "Recovered digest"
+            assert mock_client.aio.models.generate_content.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_generate_catchup_falls_back_to_pro_when_flash_503(self):
+        """All Flash retries fail with 503 → fallback to Pro succeeds."""
+        mock_client = Mock()
+        good = Mock()
+        good.text = "Pro digest"
+
+        class FakeServerError(Exception):
+            def __init__(self):
+                super().__init__("503 UNAVAILABLE")
+                self.code = 503
+
+        # Flash fails 3 times → Pro succeeds on first try
+        mock_client.aio.models.generate_content = AsyncMock(
+            side_effect=[FakeServerError(), FakeServerError(), FakeServerError(), good]
+        )
+
+        with patch('summarizer.get_genai_client', return_value=mock_client), \
+             patch('summarizer.asyncio.sleep', new=AsyncMock()):
+            messages = [{"username": "u", "text": "hi", "timestamp": "2024-01-15T10:30:00", "tg_user_id": 1}]
+            result = await summarizer.generate_catchup(messages, [])
+            assert result == "Pro digest"
+            # 3 Flash attempts + 1 Pro success = 4 total
+            assert mock_client.aio.models.generate_content.call_count == 4
+            # Verify model fallback: last call used MODEL_PRO
+            last_call_kwargs = mock_client.aio.models.generate_content.call_args_list[-1].kwargs
+            assert last_call_kwargs["model"] == summarizer.MODEL_PRO
+
+    @pytest.mark.asyncio
+    async def test_generate_catchup_503_exhausts_all_models_returns_friendly_msg(self):
+        """All retries on both models fail → user-friendly message, no raw error."""
+        mock_client = Mock()
+
+        class FakeServerError(Exception):
+            def __init__(self):
+                super().__init__("503 UNAVAILABLE: high demand")
+                self.code = 503
+
+        mock_client.aio.models.generate_content = AsyncMock(side_effect=FakeServerError())
+
+        with patch('summarizer.get_genai_client', return_value=mock_client), \
+             patch('summarizer.asyncio.sleep', new=AsyncMock()):
+            messages = [{"username": "u", "text": "hi", "timestamp": "2024-01-15T10:30:00", "tg_user_id": 1}]
+            result = await summarizer.generate_catchup(messages, [])
+            assert "couldn't generate a digest" in result
+            assert "503" not in result
+            assert "UNAVAILABLE" not in result
+            # 3 retries × 2 models = 6 attempts
+            assert mock_client.aio.models.generate_content.call_count == 6
 
 
 class TestGenerateTopics:
