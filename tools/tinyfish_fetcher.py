@@ -50,5 +50,5 @@ async def fetch_url_content(url: str, max_chars: int = MAX_CONTENT_CHARS) -> str
                 logger.warning(f"TinyFish errors for {url}: {errors}")
             return None
     except Exception as e:
-        logger.error(f"TinyFish fetch failed for {url}: {e}")
+        logger.error(f"TinyFish fetch failed for {url}: {type(e).__name__}: {e}", exc_info=True)
         return None

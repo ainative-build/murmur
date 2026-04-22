@@ -19,9 +19,12 @@ async def extract_link_summary(url: str, original_text: str) -> Optional[str]:
     """
     try:
         url_lower = url.lower()
+        logger.info(f"extract_link_summary: url={url[:60]}, type={'grok' if 'grok.com' in url_lower else 'spotify' if 'spotify.com' in url_lower else 'agent'}")
 
         if "grok.com" in url_lower:
-            return await _extract_grok_link(url)
+            result = await _extract_grok_link(url)
+            logger.info(f"Grok extraction result: {len(result) if result else 0} chars")
+            return result
         elif "spotify.com" in url_lower:
             return _extract_spotify_link(url)
         else:
@@ -30,7 +33,7 @@ async def extract_link_summary(url: str, original_text: str) -> Optional[str]:
                 return agent_result
             return None
     except Exception as e:
-        logger.error(f"Link extraction failed: {e}")
+        logger.error(f"Link extraction failed: {type(e).__name__}: {e}", exc_info=True)
         return None
 
 
