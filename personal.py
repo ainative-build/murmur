@@ -60,6 +60,29 @@ def handle_dm_note(tg_user_id: int, text: str) -> Optional[int]:
     )
 
 
+def handle_dm_voice(tg_user_id: int, transcript: str) -> Optional[int]:
+    """Store a voice transcript as personal source."""
+    return db.store_personal_source(
+        tg_user_id=tg_user_id,
+        source_type="voice",
+        content=transcript,
+        title="Voice message",
+    )
+
+
+def handle_dm_file(
+    tg_user_id: int, filename: str, text: str, summary: Optional[str] = None
+) -> Optional[int]:
+    """Store extracted file text as personal source."""
+    return db.store_personal_source(
+        tg_user_id=tg_user_id,
+        source_type="file",
+        content=text,
+        title=filename,
+        summary=summary,
+    )
+
+
 def detect_urls(text: str) -> list[str]:
     """Extract URLs from text."""
     return re.findall(URL_REGEX, text)

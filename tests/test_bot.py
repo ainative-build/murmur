@@ -50,10 +50,21 @@ class TestDetectLinkType:
         assert bot._detect_link_type("https://example.com/file.PDF") == "pdf"
         assert bot._detect_link_type("http://arxiv.org/paper.pdf") == "pdf"
 
+    def test_detect_github(self):
+        """Should detect GitHub URLs."""
+        assert bot._detect_link_type("https://github.com/user/repo") == "github"
+
+    def test_detect_grok(self):
+        """Should detect Grok share URLs."""
+        assert bot._detect_link_type("https://grok.com/share/abc123") == "grok"
+
+    def test_detect_spotify(self):
+        """Should detect Spotify URLs."""
+        assert bot._detect_link_type("https://open.spotify.com/episode/abc") == "spotify"
+
     def test_detect_default_webpage(self):
         """Should return 'webpage' for unrecognized URLs."""
         assert bot._detect_link_type("https://example.com/article") == "webpage"
-        assert bot._detect_link_type("https://github.com/user/repo") == "webpage"
         assert bot._detect_link_type("https://medium.com/@author/post") == "webpage"
 
     def test_detect_case_insensitive(self):

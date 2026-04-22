@@ -188,6 +188,20 @@ def get_web_content(state: AgentState) -> Dict[str, Any]:
                 console.print(f"Playwright fallback error: {pw_err}", style="red")
                 error_message = error_message or f"Tavily and Playwright both failed for {url}"
 
+        # If both Tavily and Playwright failed, try TinyFish as last resort
+        if not content_source:
+            console.print("Tavily + Playwright failed — trying TinyFish fallback...", style="yellow")
+            try:
+                import asyncio
+                from tools.tinyfish_fetcher import fetch_url_content
+                tf_text = asyncio.get_event_loop().run_until_complete(fetch_url_content(url))
+                if tf_text and len(tf_text) > 100:
+                    content_source = f"URL: {url}\nRaw Content: {tf_text}\n"
+                    error_message = None
+                    console.print(f"TinyFish extracted {len(tf_text)} chars", style="green")
+            except Exception as tf_err:
+                console.print(f"TinyFish fallback error: {tf_err}", style="yellow")
+
     except Exception as e:
         console.print(f"Error getting content from URL {url}: {e}", style="red bold")
         error_message = f"Error: An unexpected error occurred while getting content from the URL. {e}"
@@ -223,8 +237,24 @@ def get_twitter_content(state: AgentState) -> Dict[str, Any]:
     is_article = "/article/" in url.lower() or "/articles/" in url.lower()
 
     if is_article:
-        # X Articles require login — can't be extracted by bots
-        error_message = "Error: This is an X Article which requires login to view. Bot cannot access it."
+        # X Articles require login — try TinyFish which can bypass this
+        console.print("X Article detected — trying TinyFish extraction...", style="cyan")
+        try:
+            import asyncio
+            from tools.tinyfish_fetcher import fetch_url_content
+            tinyfish_content = asyncio.get_event_loop().run_until_complete(fetch_url_content(url))
+            if tinyfish_content and len(tinyfish_content) > 100:
+                console.print(f"TinyFish extracted {len(tinyfish_content)} chars from X Article", style="green")
+                return {
+                    "content_type": content_type,
+                    "content": tinyfish_content.strip(),
+                    "error": None,
+                    "needs_web_fallback": False,
+                }
+        except Exception as e:
+            console.print(f"TinyFish failed for X Article: {e}", style="yellow")
+        # Only error if TinyFish also fails
+        error_message = "Error: This is an X Article which requires login to view. TinyFish extraction also failed."
         console.print(error_message, style="yellow")
         return {
             "content_type": content_type,
@@ -406,28 +436,94 @@ def get_linkedin_content(state: AgentState) -> Dict[str, Any]:
     }
 
 
+def _extract_video_id(url: str) -> Optional[str]:
+    """Extract YouTube video ID from various URL formats."""
+    patterns = [
+        r'(?:v=|/v/|youtu\.be/)([a-zA-Z0-9_-]{11})',
+        r'(?:embed/)([a-zA-Z0-9_-]{11})',
+        r'(?:shorts/)([a-zA-Z0-9_-]{11})',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _get_youtube_transcript(video_id: str) -> Optional[str]:
+    """Fetch YouTube transcript via youtube-transcript-api v1.2.4+ (instance-based).
+
+    Truncates to 10K chars. Prefers manual captions over auto-generated.
+    """
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        ytt_api = YouTubeTranscriptApi()
+        transcript = ytt_api.fetch(video_id, languages=['en', 'vi'])
+        full_text = ' '.join([item.text for item in transcript])
+        return full_text[:10000]  # Truncate for summarization
+    except Exception as e:
+        console.print(f"Transcript API failed: {e}", style="yellow")
+        return None
+
+
+def _get_youtube_title(video_id: str) -> Optional[str]:
+    """Get YouTube video title via oEmbed (no API key needed)."""
+    try:
+        import requests as _requests
+        resp = _requests.get(
+            f"https://www.youtube.com/oembed?url=https://youtube.com/watch?v={video_id}&format=json",
+            timeout=5,
+        )
+        return resp.json().get("title")
+    except Exception:
+        return None
+
+
 def get_youtube_content(state: AgentState) -> Dict[str, Any]:
-    """Fetches content (description/transcript) using youtube_scraper with fallbacks."""
+    """Fetches YouTube content: transcript first (fast), AgentQL fallback (slow).
+
+    Strategy: transcript-api → much richer than title+description from AgentQL.
+    Fallback: AgentQL scraper for videos without transcripts.
+    """
     console.print(
-        "---GET YOUTUBE CONTENT (yt-dlp + Fallbacks)--- ", style="yellow bold"
+        "---GET YOUTUBE CONTENT (Transcript → AgentQL Fallback)--- ", style="yellow bold"
     )
     url = state["url"]
     error_message = None
     content_result = ""
-    # For YouTube, let's treat the content type as Webpage for the summarizer initially
     content_type = ContentType.Webpage
 
-    # Reset error and fallback flag from previous steps if any
     state["error"] = None
-    # No longer using needs_web_fallback with AgentQL direct approach
-    # state["needs_web_fallback"] = False
 
+    video_id = _extract_video_id(url)
+    if not video_id:
+        return {
+            "content_type": content_type,
+            "content": "",
+            "error": f"Could not extract video ID from URL: {url}",
+            "needs_web_fallback": False,
+        }
+
+    # Step 1: Try transcript (fast, no browser needed)
+    transcript = _get_youtube_transcript(video_id)
+    if transcript and len(transcript) > 100:
+        title = _get_youtube_title(video_id) or "YouTube Video"
+        content_result = f"Title: {title}\n\nTranscript:\n{transcript}"
+        console.print(
+            f"Transcript fetched: {len(transcript)} chars for {video_id}", style="green"
+        )
+        return {
+            "content_type": content_type,
+            "content": content_result.strip(),
+            "error": None,
+            "needs_web_fallback": False,
+        }
+
+    # Step 2: Fallback to AgentQL scraper (title + description)
+    console.print("No transcript — falling back to AgentQL scraper...", style="yellow")
     try:
-        console.print(f"Fetching YouTube info for URL (AgentQL): {url}", style="cyan")
-        # Use the YouTube AgentQL tool
-        result = scrape_youtube_agentql(url, headless=True)  # Call with headless=True
+        result = scrape_youtube_agentql(url, headless=True)
 
-        # AgentQL scraper returns: {"title": "...", "description": "..."}
         if isinstance(result, dict) and (
             result.get("title") or result.get("description")
         ):
@@ -435,31 +531,19 @@ def get_youtube_content(state: AgentState) -> Dict[str, Any]:
             description = result.get("description", "")
             content_result = f"Title: {title}\n\nDescription:\n{description}".strip()
             console.print(
-                f"Successfully fetched YouTube content (AgentQL) for: {url}",
-                style="green",
+                f"AgentQL fallback succeeded for: {url}", style="green"
             )
             error_message = None
-        elif (
-            isinstance(result, dict) and "error" in result
-        ):  # If scraper returns dict with error
-            error_message = (
-                f"YouTube AgentQL scraper returned an error: {result['error']}"
-            )
+        elif isinstance(result, dict) and "error" in result:
+            error_message = f"YouTube AgentQL scraper error: {result['error']}"
             console.print(error_message, style="red bold")
-            content_result = ""
         else:
-            error_message = f"YouTube AgentQL scraper returned unexpected result or no content: {result}"
+            error_message = f"YouTube scraper returned no content: {result}"
             console.print(error_message, style="yellow")
-            content_result = ""
 
     except Exception as e:
-        console.print(
-            f"Unexpected error calling scrape_youtube_agentql for {url}: {e}",
-            style="red bold",
-        )
-        error_message = f"Error: An unexpected error occurred while calling the YouTube AgentQL tool. {e}"
-        content_result = ""
-        # needs_fallback = False # Not used anymore
+        console.print(f"AgentQL fallback error: {e}", style="red bold")
+        error_message = f"Error: YouTube extraction failed. {e}"
 
     return {
         # **state,

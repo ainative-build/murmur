@@ -26,6 +26,13 @@ NOTEBOOKLM_NOTEBOOK_ID: str = os.getenv("NOTEBOOKLM_NOTEBOOK_ID", "")
 GDRIVE_FOLDER_ID: str = os.getenv("GDRIVE_FOLDER_ID", "")
 GOOGLE_CREDENTIALS_PATH: str = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
 
+# --- TinyFish ---
+TINYFISH_API_KEY: str = os.getenv("TINYFISH_API_KEY", "")
+
+# --- Spotify ---
+SPOTIFY_CLIENT_ID: str = os.getenv("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET: str = os.getenv("SPOTIFY_CLIENT_SECRET", "")
+
 # --- Server ---
 HOST: str = os.getenv("HOST", "0.0.0.0")
 PORT: int = int(os.getenv("PORT", "8080"))
