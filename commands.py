@@ -238,6 +238,95 @@ async def delete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ---------------------------------------------------------------------------
+# DM voice handler — voice/audio → transcribe → save as personal source
+# ---------------------------------------------------------------------------
+
+async def dm_voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle voice/audio DMs — transcribe and save as personal source."""
+    message = update.effective_message
+    if not message:
+        return
+
+    tg_user_id = update.effective_user.id
+    voice = message.voice or message.audio
+    if not voice:
+        return
+
+    await message.reply_text("⏳ Transcribing voice message...")
+
+    try:
+        from tools.voice_transcriber import transcribe_audio
+
+        file = await context.bot.get_file(voice.file_id)
+        audio_bytes = await file.download_as_bytearray()
+        mime_type = voice.mime_type or "audio/ogg"
+
+        transcript = await transcribe_audio(bytes(audio_bytes), mime_type=mime_type)
+        if transcript:
+            source_id = personal.handle_dm_voice(tg_user_id, transcript)
+            if source_id:
+                preview = transcript[:100] + ("..." if len(transcript) > 100 else "")
+                await message.reply_text(
+                    f"✅ Voice message saved (#{source_id})\n\n<i>{html.escape(preview)}</i>",
+                    parse_mode="HTML",
+                )
+            else:
+                await message.reply_text("❌ Failed to save voice message. Try again.")
+        else:
+            await message.reply_text("⚠️ Couldn't transcribe this voice message.")
+    except Exception as e:
+        logger.error(f"DM voice handler failed: {e}")
+        await message.reply_text("❌ Voice transcription failed. Try again.")
+
+
+# ---------------------------------------------------------------------------
+# DM document handler — extract text → save as personal source
+# ---------------------------------------------------------------------------
+
+async def dm_document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle document DMs — extract text and save as personal source."""
+    message = update.effective_message
+    if not message or not message.document:
+        return
+
+    tg_user_id = update.effective_user.id
+    doc = message.document
+    filename = doc.file_name or "unknown"
+
+    try:
+        from tools.file_extractor import extract_file_text, MAX_FILE_SIZE
+
+        if doc.file_size and doc.file_size > MAX_FILE_SIZE:
+            await message.reply_text(f"⚠️ File too large (max 5MB): {html.escape(filename)}", parse_mode="HTML")
+            return
+
+        await message.reply_text(f"⏳ Processing {html.escape(filename)}...", parse_mode="HTML")
+
+        file = await context.bot.get_file(doc.file_id)
+        file_bytes = await file.download_as_bytearray()
+
+        text = extract_file_text(bytes(file_bytes), filename, doc.mime_type)
+        if text:
+            source_id = personal.handle_dm_file(tg_user_id, filename, text)
+            if source_id:
+                await message.reply_text(
+                    f"✅ File saved (#{source_id}): {html.escape(filename)} ({len(text)} chars extracted)",
+                    parse_mode="HTML",
+                )
+            else:
+                await message.reply_text("❌ Failed to save file. Try again.")
+        else:
+            await message.reply_text(
+                f"⚠️ Couldn't extract text from {html.escape(filename)}. "
+                "Supported: PDF, DOCX, TXT, MD.",
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error(f"DM document handler failed: {e}")
+        await message.reply_text("❌ File processing failed. Try again.")
+
+
+# ---------------------------------------------------------------------------
 # DM message handler (non-command) — Phase 2
 # ---------------------------------------------------------------------------
 

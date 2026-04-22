@@ -29,6 +29,7 @@ from telegram_format import md_to_telegram_html
 from commands import (
     start_handler, catchup_handler, search_handler,
     note_handler, sources_handler, delete_handler, dm_message_handler,
+    dm_voice_handler, dm_document_handler,
     topics_handler, topic_handler, decide_handler,
     remind_handler, export_handler, kb_handler, feedback_handler,
 )
@@ -73,11 +74,24 @@ def _register_handlers(app: Application) -> None:
         dm_message_handler,
     ))
 
-    # Group messages: capture ALL text + photos + documents for history.
+    # DM voice/audio messages — transcribe and save as personal source.
+    app.add_handler(MessageHandler(
+        (filters.VOICE | filters.AUDIO) & private,
+        dm_voice_handler,
+    ))
+
+    # DM document attachments — extract text and save as personal source.
+    app.add_handler(MessageHandler(
+        filters.Document.ALL & private,
+        dm_document_handler,
+    ))
+
+    # Group messages: capture ALL text + photos + documents + voice for history.
     # group=1 runs alongside command handlers in group 0.
     app.add_handler(
         MessageHandler(
-            (filters.TEXT | filters.PHOTO | filters.Document.ALL) & filters.ChatType.GROUPS,
+            (filters.TEXT | filters.PHOTO | filters.Document.ALL
+             | filters.VOICE | filters.AUDIO) & filters.ChatType.GROUPS,
             group_message_handler,
         ),
         group=1,
@@ -87,7 +101,7 @@ def _register_handlers(app: Application) -> None:
 # --- Handlers ---
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Capture ALL group messages (text + photos + docs) into Supabase."""
+    """Capture ALL group messages (text + photos + docs + voice) into Supabase."""
     message = update.effective_message
     if not message:
         return
@@ -100,19 +114,38 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Get text — could be message.text or message.caption (for photos/docs)
     text = message.text or message.caption or ""
+    media_type = None
+    source_filename = None
 
-    # Check if this is a photo/document that needs vision analysis
+    # Check message content types
     has_photo = bool(message.photo)
+    has_voice = bool(message.voice or message.audio)
     has_document = bool(message.document)
 
-    # If photo, analyze with Gemini vision and prepend description to text
-    if has_photo:
+    # Voice/audio messages — transcribe with Gemini (stored silently, no reply)
+    if has_voice:
+        transcript = await _transcribe_voice(message, context)
+        if transcript:
+            text = f"[Voice: {transcript}]" + (f"\n{text}" if text else "")
+        media_type = "voice" if message.voice else "audio"
+
+    # Photo — analyze with Gemini vision
+    elif has_photo:
         description = await _analyze_image(message, context)
         if description:
             text = f"[Image: {description}]" + (f"\n{text}" if text else "")
+        media_type = "photo"
+
+    # Document — extract text if supported type
+    elif has_document:
+        file_text, filename = await _extract_document_text(message, context)
+        source_filename = filename
+        if file_text:
+            text = f"[File: {filename}]\n{file_text}" + (f"\n{text}" if text else "")
+            media_type = "file"
 
     if not text:
-        return  # Nothing to store (no text, no caption, image analysis failed)
+        return  # Nothing to store
 
     urls = re.findall(URL_REGEX, text)
     has_links = len(urls) > 0
@@ -129,6 +162,8 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
         forwarded_from=message.forward_origin.sender_user.username if (
             message.forward_origin and hasattr(message.forward_origin, "sender_user") and message.forward_origin.sender_user
         ) else None,
+        media_type=media_type,
+        source_filename=source_filename,
     )
 
     db.upsert_user(tg_user_id, username)
@@ -137,16 +172,96 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if has_links:
         await _process_links_and_store(message, text, urls, message_id)
 
+    # Auto-summarize file attachments (not voice — voice is silent)
+    # Only if extracted text is 1K-10K chars (sweet spot for summarization)
+    if media_type == "file" and file_text and 1000 < len(file_text) < 10000:
+        await _summarize_and_reply_file(message, file_text, source_filename)
+
+
+def _handle_spotify_link(url: str) -> str:
+    """Extract Spotify metadata via Web API (podcast-focused) with oEmbed fallback."""
+    from tools.spotify_scraper import get_spotify_metadata
+
+    metadata = get_spotify_metadata(url)
+    if not metadata:
+        return "Error: Could not extract Spotify metadata."
+
+    title = metadata.get("title", "Unknown")
+    desc = metadata.get("description", "")
+    content_type = metadata.get("type", "unknown")
+    show_name = metadata.get("show_name", "")
+
+    if content_type == "episode" and desc:
+        formatted = f"# 🎙️ {title}\n\n"
+        if show_name:
+            formatted += f"**Show:** {show_name}\n\n"
+        formatted += f"## Description\n{desc}"
+        return formatted
+    elif content_type == "show" and desc:
+        return f"# 🎙️ {title}\n\n## About\n{desc}"
+    elif title:
+        return f"# 🎵 {title}\n\nSpotify {content_type}"
+    else:
+        return "Error: Spotify link detected but couldn't extract details."
+
+
+async def _handle_grok_link(url: str) -> str:
+    """Extract Grok conversation via TinyFish and summarize with BAML.
+
+    Grok share links are JS-heavy — TinyFish is the only working extractor.
+    """
+    from tools.tinyfish_fetcher import fetch_url_content
+    from baml_client import b
+    from baml_client.types import ContentType
+
+    content = await fetch_url_content(url)
+    if not content or len(content) < 100:
+        return "Error: Could not extract content from Grok link."
+
+    try:
+        summary_result = b.SummarizeContent(
+            content=content,
+            content_type=ContentType.Webpage,
+            context=f"Grok AI conversation from {url}",
+        )
+        title = getattr(summary_result, "title", "Grok Conversation")
+        key_points = getattr(summary_result, "key_points", [])
+        concise_summary = getattr(summary_result, "concise_summary", "")
+
+        formatted = f"# {title}\n\n"
+        if key_points:
+            formatted += "## Key Points:\n"
+            for point in key_points:
+                formatted += f"- {point}\n"
+            formatted += "\n"
+        formatted += f"## Summary:\n{concise_summary}"
+        return formatted
+    except Exception as e:
+        logger.error(f"Grok summarization failed: {e}")
+        return f"Error: Failed to summarize Grok conversation: {e}"
+
 
 async def _process_links_and_store(
     message, text: str, urls: list[str], message_id: Optional[int]
 ) -> None:
-    """Run agent pipeline on link message, reply with summary, store in link_summaries."""
+    """Run agent pipeline on link message, reply with summary, store in link_summaries.
+
+    Grok links are handled pre-agent via TinyFish (no BAML route exists for Grok).
+    """
     try:
-        agent_result = await run_agent(text)
+        url = urls[0]
+        link_type = _detect_link_type(url)
+
+        # Grok links: TinyFish pre-agent (no BAML route for Grok)
+        if link_type == "grok":
+            agent_result = await _handle_grok_link(url)
+        # Spotify links: Web API pre-agent (no BAML route for Spotify)
+        elif link_type == "spotify":
+            agent_result = _handle_spotify_link(url)
+        else:
+            agent_result = await run_agent(text)
 
         if isinstance(agent_result, str) and not agent_result.startswith("Error:"):
-            url = urls[0]
             title = None
             lines = agent_result.strip().split("\n")
             if lines and lines[0].startswith("#"):
@@ -156,7 +271,7 @@ async def _process_links_and_store(
                 db.store_link_summary(
                     message_id=message_id,
                     url=url,
-                    link_type=_detect_link_type(url),
+                    link_type=link_type,
                     title=title,
                     summary=agent_result,
                 )
@@ -181,15 +296,12 @@ async def _process_links_and_store(
                 if i + MAX_TELEGRAM_MSG_LEN < len(formatted):
                     await asyncio.sleep(0.5)
 
-            # Schedule deletion after 1 hour via PTB job queue
-            # (asyncio.create_task doesn't survive Cloud Run request lifecycle)
-            if sent_msgs and ptb_app and ptb_app.job_queue:
+            # Schedule deletion after 1 hour via Supabase (survives container restarts)
+            if sent_msgs:
+                from datetime import timedelta
+                delete_after = datetime.now(timezone.utc) + timedelta(hours=1)
                 for sent in sent_msgs:
-                    ptb_app.job_queue.run_once(
-                        _delete_message_job,
-                        when=3600,
-                        data={"chat_id": sent.chat_id, "message_id": sent.message_id},
-                    )
+                    db.schedule_message_deletion(sent.chat_id, sent.message_id, delete_after)
         elif isinstance(agent_result, str):
             logger.error(f"Agent error for {urls[0]}: {agent_result}")
             # Give specific feedback based on error type
@@ -247,24 +359,124 @@ async def _analyze_image(message, context: ContextTypes.DEFAULT_TYPE) -> str | N
         return None
 
 
-async def _delete_message_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """PTB job callback: delete a single message. Scheduled via job_queue.run_once."""
-    data = context.job.data
+async def _transcribe_voice(message, context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    """Download voice/audio from Telegram and transcribe with Gemini.
+
+    Returns transcript text or None on failure. Stored silently (no reply in group).
+    """
     try:
-        await context.bot.delete_message(chat_id=data["chat_id"], message_id=data["message_id"])
+        from tools.voice_transcriber import transcribe_audio
+
+        voice = message.voice or message.audio
+        if not voice:
+            return None
+
+        file = await context.bot.get_file(voice.file_id)
+        audio_bytes = await file.download_as_bytearray()
+
+        mime_type = voice.mime_type or "audio/ogg"
+        transcript = await transcribe_audio(bytes(audio_bytes), mime_type=mime_type)
+        if transcript:
+            logger.info(f"Voice transcribed: {transcript[:80]}")
+            return transcript
+        return None
     except Exception as e:
-        logger.debug(f"Could not delete message {data['message_id']}: {e}")
+        logger.error(f"Voice transcription failed: {e}")
+        return None
+
+
+async def _extract_document_text(
+    message, context: ContextTypes.DEFAULT_TYPE
+) -> tuple[str | None, str | None]:
+    """Download a document from Telegram and extract text.
+
+    Returns (extracted_text, filename) tuple. Both None if unsupported or failed.
+    """
+    try:
+        from tools.file_extractor import extract_file_text, MAX_FILE_SIZE
+
+        doc = message.document
+        if not doc:
+            return None, None
+
+        filename = doc.file_name or "unknown"
+        mime_type = doc.mime_type
+
+        # Size gate: skip files > 5MB
+        if doc.file_size and doc.file_size > MAX_FILE_SIZE:
+            logger.info(f"File too large ({doc.file_size} bytes): {filename}")
+            return None, filename
+
+        file = await context.bot.get_file(doc.file_id)
+        file_bytes = await file.download_as_bytearray()
+
+        text = extract_file_text(bytes(file_bytes), filename, mime_type)
+        if text:
+            logger.info(f"File extracted: {filename} → {len(text)} chars")
+        return text, filename
+    except Exception as e:
+        logger.error(f"Document extraction failed: {e}")
+        return None, message.document.file_name if message.document else None
+
+
+async def _summarize_and_reply_file(message, file_text: str, filename: str) -> None:
+    """Summarize extracted file text and reply in group (like link summaries)."""
+    try:
+        from baml_client import b
+        from baml_client.types import ContentType
+
+        summary_result = b.SummarizeContent(
+            content=file_text,
+            content_type=ContentType.PDF,
+            context=f"File: {filename}",
+        )
+        title = getattr(summary_result, "title", filename)
+        key_points = getattr(summary_result, "key_points", [])
+        concise_summary = getattr(summary_result, "concise_summary", "")
+
+        formatted = f"# {title}\n\n"
+        if key_points:
+            formatted += "## Key Points:\n"
+            for point in key_points:
+                formatted += f"- {point}\n"
+            formatted += "\n"
+        formatted += f"## Summary:\n{concise_summary}"
+
+        html_text = md_to_telegram_html(formatted)
+        sent_msgs = []
+        for i in range(0, len(html_text), MAX_TELEGRAM_MSG_LEN):
+            chunk = html_text[i:i + MAX_TELEGRAM_MSG_LEN]
+            try:
+                sent = await message.reply_text(chunk, parse_mode=ParseMode.HTML)
+                sent_msgs.append(sent)
+            except Exception:
+                await message.reply_text(formatted[i:i + MAX_TELEGRAM_MSG_LEN])
+
+        # Schedule auto-delete after 1 hour via Supabase (survives container restarts)
+        if sent_msgs:
+            from datetime import timedelta
+            delete_after = datetime.now(timezone.utc) + timedelta(hours=1)
+            for sent in sent_msgs:
+                db.schedule_message_deletion(sent.chat_id, sent.message_id, delete_after)
+    except Exception as e:
+        logger.error(f"File summarization failed: {e}")
 
 
 def _detect_link_type(url: str) -> str:
     """Simple heuristic to detect link type from URL."""
     url_lower = url.lower()
+    if "grok.com" in url_lower:
+        return "grok"
     if "twitter.com" in url_lower or "x.com" in url_lower:
         return "tweet"
     if "youtube.com" in url_lower or "youtu.be" in url_lower:
         return "youtube"
     if "linkedin.com" in url_lower:
         return "linkedin"
+    if "spotify.com" in url_lower:
+        return "spotify"
+    if "github.com" in url_lower:
+        return "github"
     if url_lower.endswith(".pdf"):
         return "pdf"
     return "webpage"
@@ -381,6 +593,33 @@ async def check_reminders_endpoint():
         return {"ok": True, "reminders_sent": count}
     except Exception as e:
         logger.error(f"Reminder check failed: {e}", exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/cleanup-messages")
+async def cleanup_messages_endpoint():
+    """Called by Cloud Scheduler to delete messages past their auto-delete time.
+
+    Processes scheduled_deletions table: deletes Telegram messages, removes DB records.
+    Recommended: run every 10 minutes via Cloud Scheduler.
+    """
+    try:
+        due = db.get_due_deletions()
+        deleted = 0
+        for row in due:
+            try:
+                await ptb_app.bot.delete_message(
+                    chat_id=row["tg_chat_id"],
+                    message_id=row["tg_message_id"],
+                )
+                deleted += 1
+            except Exception as e:
+                logger.debug(f"Could not delete message {row['tg_message_id']}: {e}")
+            # Remove record regardless (message may already be deleted manually)
+            db.remove_scheduled_deletion(row["id"])
+        return {"ok": True, "processed": len(due), "deleted": deleted}
+    except Exception as e:
+        logger.error(f"Cleanup messages failed: {e}", exc_info=True)
         return {"ok": False, "error": str(e)}
 
 

@@ -40,6 +40,8 @@ def store_message(
     has_links: bool = False,
     reply_to_tg_msg_id: Optional[int] = None,
     forwarded_from: Optional[str] = None,
+    media_type: Optional[str] = None,
+    source_filename: Optional[str] = None,
 ) -> Optional[int]:
     """Store a group message. Returns internal id or None if duplicate/error."""
     client = get_client()
@@ -53,6 +55,8 @@ def store_message(
         "has_links": has_links,
         "reply_to_tg_msg_id": reply_to_tg_msg_id,
         "forwarded_from": forwarded_from,
+        "media_type": media_type,
+        "source_filename": source_filename,
     }
     try:
         result = (
@@ -639,3 +643,51 @@ def store_feedback(tg_user_id: int, username: Optional[str], feedback_text: str)
     except Exception as e:
         logger.error(f"Failed to store feedback: {e}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Scheduled deletions — persists auto-delete timers across container restarts
+# ---------------------------------------------------------------------------
+
+def schedule_message_deletion(
+    tg_chat_id: int, tg_message_id: int, delete_after: datetime
+) -> None:
+    """Schedule a Telegram message for deletion at a future time."""
+    client = get_client()
+    row = {
+        "tg_chat_id": tg_chat_id,
+        "tg_message_id": tg_message_id,
+        "delete_after": delete_after.isoformat(),
+    }
+    try:
+        client.table("scheduled_deletions").upsert(
+            row, on_conflict="tg_chat_id,tg_message_id", ignore_duplicates=True
+        ).execute()
+    except Exception as e:
+        logger.error(f"Failed to schedule deletion: {e}")
+
+
+def get_due_deletions() -> list[dict]:
+    """Get all scheduled deletions that are past their delete_after time."""
+    client = get_client()
+    try:
+        result = (
+            client.table("scheduled_deletions")
+            .select("id, tg_chat_id, tg_message_id")
+            .lte("delete_after", datetime.now(timezone.utc).isoformat())
+            .limit(100)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Failed to get due deletions: {e}")
+        return []
+
+
+def remove_scheduled_deletion(deletion_id: int) -> None:
+    """Remove a scheduled deletion record after processing."""
+    client = get_client()
+    try:
+        client.table("scheduled_deletions").delete().eq("id", deletion_id).execute()
+    except Exception as e:
+        logger.error(f"Failed to remove scheduled deletion {deletion_id}: {e}")

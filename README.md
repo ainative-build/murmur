@@ -6,22 +6,22 @@ Silent listener that captures team discussions, summarizes shared links, and pro
 
 ## What it does
 
-**In group chats:** Murmur silently captures every message and auto-summarizes shared links (articles, tweets, PDFs, YouTube, LinkedIn posts).
+**In group chats:** Murmur silently captures every message — text, links, voice messages, photos, and file attachments. Auto-summarizes shared links (articles, tweets, PDFs, YouTube transcripts, LinkedIn posts, Grok conversations, Spotify podcasts) and file attachments (PDF, DOCX, TXT, MD).
 
-**In DMs:** Members interact with Murmur to catch up, search, brainstorm, and make decisions — all grounded in real team context.
+**In DMs:** Members interact with Murmur to catch up, search, brainstorm, and make decisions — all grounded in real team context. Send voice messages, files, or links to save them as personal sources.
 
 ### Commands
 
 | Command | Description | Status |
 |---------|-------------|--------|
 | `/start` | Welcome message + command list | ✅ |
-| `/catchup` | Digest of discussions since your last check-in | Phase 2 |
-| `/search <keyword>` | Search messages and links | Phase 2 |
-| `/topics` | List active discussion threads | Phase 3 |
-| `/topic <name>` | Deep dive on a specific topic | Phase 3 |
-| `/decide <topic>` | Structured decision view (options, arguments, evidence) | Phase 3 |
-| `/remind` | Configure reminder frequency | Phase 4 |
-| `/export` | Export topics to NotebookLM | Phase 4 |
+| `/catchup` | Digest of discussions since your last check-in | ✅ |
+| `/search <keyword>` | Search messages and links | ✅ |
+| `/topics` | List active discussion threads | ✅ |
+| `/topic <name>` | Deep dive on a specific topic | ✅ |
+| `/decide <topic>` | Structured decision view (options, arguments, evidence) | ✅ |
+| `/remind` | Configure reminder frequency | ✅ |
+| `/export` | Export topics to markdown files | ✅ |
 
 ## Tech Stack
 
@@ -32,7 +32,9 @@ Silent listener that captures team discussions, summarizes shared links, and pro
 | Link pipeline | LangGraph + BAML (routing + summarization) |
 | LLM | Gemini 3 via `google-genai` SDK (Vertex AI in production) |
 | Database | Supabase (Postgres) |
-| Content extraction | Tavily (web), twitterapi.io (X), Playwright+AgentQL (YouTube, LinkedIn), PyMuPDF (PDF) |
+| Content extraction | TinyFish (Grok, X Articles, GitHub), Tavily (web), twitterapi.io (X), youtube-transcript-api (YouTube), Playwright+AgentQL (LinkedIn), PyMuPDF (PDF), python-docx (DOCX) |
+| Voice/audio | Gemini 3 Flash audio transcription (OGG Opus from Telegram) |
+| Podcast metadata | Spotify Web API (client credentials) with oEmbed fallback |
 | Package manager | uv |
 | Deployment | Docker + GCP Cloud Run |
 
@@ -66,6 +68,11 @@ GEMINI_API_KEY=your_gemini_api_key
 TAVILY_API_KEY=your_tavily_key
 TWITTER_API_IO_KEY=your_twitterapi_io_key
 AGENTQL_API_KEY=your_agentql_key
+TINYFISH_API_KEY=your_tinyfish_key
+
+# Optional: Spotify (for podcast episode metadata)
+# SPOTIFY_CLIENT_ID=your_spotify_client_id
+# SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 
 # Optional: DeepSeek as BAML fallback
 DEEPSEEK_API_KEY=your_deepseek_key
@@ -88,7 +95,7 @@ Run the migration against your Supabase project:
 cat supabase/migrations/001_init_schema.sql
 ```
 
-This creates 6 tables: `messages`, `link_summaries`, `personal_sources`, `user_chat_state`, `users`, `exports`.
+Run all migrations (001-008) in order. Creates 7 tables: `messages`, `link_summaries`, `personal_sources`, `user_chat_state`, `users`, `exports`, `scheduled_deletions`, plus `feedback`.
 
 ### 4. BotFather setup
 
@@ -151,13 +158,22 @@ murmur/
 ├── agent.py            # LangGraph pipeline: link routing + summarization
 ├── config.py           # Centralized env var loading
 ├── db.py               # Supabase client wrapper
-├── commands.py         # DM command handlers (/start)
+├── commands.py         # DM command handlers (/start, /catchup, /search, etc.)
+├── summarizer.py       # Gemini 3 LLM calls (catchup, topics, decide, draft)
+├── personal.py         # Personal source processing (DM links, voice, files)
 ├── url_normalize.py    # URL normalization for dedup
 ├── baml_src/           # BAML LLM configs (Gemini 3 Flash + DeepSeek fallback)
-├── tools/              # Content extractors (web, PDF, X, YouTube, LinkedIn)
-├── supabase/           # Database migrations
-├── tests/              # 124 unit tests
-├── scripts/            # Deploy scripts (Cloud Run, Docker, local)
+├── tools/              # Content extractors
+│   ├── tinyfish_fetcher.py   # TinyFish Web Fetch (Grok, X Articles, GitHub)
+│   ├── voice_transcriber.py  # Gemini audio transcription
+│   ├── file_extractor.py     # PDF, DOCX, TXT, MD text extraction
+│   ├── spotify_scraper.py    # Spotify Web API + oEmbed metadata
+│   ├── search.py             # Tavily web extraction
+│   ├── pdf_handler.py        # PyMuPDF PDF handler
+│   └── ...                   # Twitter, LinkedIn, YouTube scrapers
+├── supabase/           # Database migrations (001-008)
+├── tests/              # 263 unit tests
+├── scripts/            # Deploy + integration test scripts
 └── docs/               # Architecture, code standards, codebase summary
 ```
 
@@ -194,10 +210,11 @@ User DM ◄──► Murmur Bot (commands)
 | 3. Structured Intelligence | /topics, /topic, /decide | ✅ Complete |
 | 4. Extended Workflows | Reminders, markdown export | ✅ Complete |
 
+| 5. Rich Media | Voice, files, YouTube transcripts, Spotify, TinyFish | ✅ Complete |
+
 ### Planned
 - `/draft <topic>` — Multi-turn AI brainstorm with team context (ConversationHandler UX needs refinement)
-
-See `plans/260419-1156-murmur-bot/plan.md` for detailed phase plans.
+- **pgvector + Gemini context caching** — Semantic search via Supabase pgvector (embed messages → retrieve relevant 20-30 instead of brute-force 200+). Context caching for repeated system prompts (75% token savings on cached portion). Expected: 40% cost reduction, 50x faster for repeated queries.
 
 ## License
 
