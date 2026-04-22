@@ -56,78 +56,35 @@ class TestDetectUrls:
         assert len(urls) == 1
 
 
-class TestHandleDmLink:
-    """Test DM link processing."""
+class TestExtractLinkSummary:
+    """Test DM link summary extraction (no storage)."""
 
     @pytest.mark.asyncio
-    async def test_handle_dm_link_success(self):
-        """Successfully process a DM link through agent pipeline."""
+    async def test_extract_link_summary_success(self):
+        """Returns summary text from agent pipeline."""
         mock_agent_result = "# Example Article\n\nSummary of the article content"
 
         with patch('personal.run_agent', new_callable=AsyncMock, return_value=mock_agent_result):
-            with patch('personal.db.store_personal_source') as mock_store:
-                mock_store.return_value = 42
-
-                result = await personal.handle_dm_link(
-                    tg_user_id=123,
-                    url="https://example.com/article",
-                    original_text="Check this link https://example.com/article"
-                )
-
-                assert result == 42
-                mock_store.assert_called_once()
-                call_kwargs = mock_store.call_args[1]
-                assert call_kwargs["tg_user_id"] == 123
-                assert call_kwargs["source_type"] == "link"
-                assert call_kwargs["url"] == "https://example.com/article"
-                assert "Example Article" in call_kwargs["title"]
+            result = await personal.extract_link_summary(
+                url="https://example.com/article",
+                original_text="Check this link https://example.com/article"
+            )
+            assert result == mock_agent_result
+            assert "Example Article" in result
 
     @pytest.mark.asyncio
-    async def test_handle_dm_link_extracts_title_from_agent(self):
-        """Extracts title from agent markdown response."""
-        mock_agent_result = "# Breaking News: Tech Industry Update\n\nDetailed summary here"
-
-        with patch('personal.run_agent', new_callable=AsyncMock, return_value=mock_agent_result):
-            with patch('personal.db.store_personal_source') as mock_store:
-                mock_store.return_value = 1
-
-                await personal.handle_dm_link(123, "https://example.com", "text")
-
-                call_kwargs = mock_store.call_args[1]
-                assert call_kwargs["title"] == "Breaking News: Tech Industry Update"
-
-    @pytest.mark.asyncio
-    async def test_handle_dm_link_agent_error(self):
-        """Handles agent pipeline errors gracefully."""
+    async def test_extract_link_summary_agent_error(self):
+        """Returns None on agent error."""
         with patch('personal.run_agent', new_callable=AsyncMock, return_value="Error: Failed to fetch"):
-            with patch('personal.db.store_personal_source') as mock_store:
-                mock_store.return_value = None
-
-                result = await personal.handle_dm_link(123, "https://example.com", "text")
-                # Should still attempt to store
-                assert mock_store.called
-
-    @pytest.mark.asyncio
-    async def test_handle_dm_link_exception_handling(self):
-        """Returns None on exception."""
-        with patch('personal.run_agent', new_callable=AsyncMock, side_effect=Exception("Network error")):
-            result = await personal.handle_dm_link(123, "https://example.com", "text")
+            result = await personal.extract_link_summary("https://example.com", "text")
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_handle_dm_link_stores_summary(self):
-        """Stores agent response as summary."""
-        mock_response = "# Title\n\nThis is a detailed summary"
-
-        with patch('personal.run_agent', new_callable=AsyncMock, return_value=mock_response):
-            with patch('personal.db.store_personal_source') as mock_store:
-                mock_store.return_value = 1
-
-                await personal.handle_dm_link(123, "https://example.com", "text")
-
-                call_kwargs = mock_store.call_args[1]
-                assert call_kwargs["summary"] == mock_response
-                assert call_kwargs["content"] == mock_response
+    async def test_extract_link_summary_exception(self):
+        """Returns None on exception."""
+        with patch('personal.run_agent', new_callable=AsyncMock, side_effect=Exception("Network error")):
+            result = await personal.extract_link_summary("https://example.com", "text")
+            assert result is None
 
 
 class TestHandleDmForward:

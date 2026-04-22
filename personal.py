@@ -12,45 +12,25 @@ logger = logging.getLogger(__name__)
 URL_REGEX = r"(https?:\/\/[^\s]+)"
 
 
-async def handle_dm_link(tg_user_id: int, url: str, original_text: str) -> Optional[int]:
-    """Process a link sent in DM — route by link type, store as personal source.
+async def extract_link_summary(url: str, original_text: str) -> Optional[str]:
+    """Extract and summarize a link — returns summary text, no storage.
 
-    Grok and Spotify links use dedicated extractors (TinyFish / Spotify API).
-    All other links go through the BAML agent pipeline.
+    Routes by link type: Grok → TinyFish, Spotify → API/oEmbed, rest → BAML agent.
     """
     try:
         url_lower = url.lower()
-        title = None
-        summary = None
 
-        # Grok links → TinyFish (no BAML route)
         if "grok.com" in url_lower:
-            summary = await _extract_grok_link(url)
-        # Spotify links → Web API / oEmbed
+            return await _extract_grok_link(url)
         elif "spotify.com" in url_lower:
-            summary = _extract_spotify_link(url)
-        # All other links → BAML agent pipeline
+            return _extract_spotify_link(url)
         else:
             agent_result = await run_agent(original_text)
             if isinstance(agent_result, str) and not agent_result.startswith("Error:"):
-                summary = agent_result
-
-        if summary:
-            lines = summary.strip().split("\n")
-            if lines and lines[0].startswith("#"):
-                title = lines[0].lstrip("#").strip()
-
-        return db.store_personal_source(
-            tg_user_id=tg_user_id,
-            source_type="link",
-            url=url,
-            title=title,
-            content=summary,
-            summary=summary,
-            original_text=original_text,
-        )
+                return agent_result
+            return None
     except Exception as e:
-        logger.error(f"Failed to handle DM link: {e}")
+        logger.error(f"Link extraction failed: {e}")
         return None
 
 

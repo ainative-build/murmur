@@ -351,15 +351,15 @@ async def dm_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await message.reply_text("❌ Failed to save. Try again.")
         return
 
-    # Check for links
+    # Check for links — extract + show summary (don't auto-save)
     urls = personal.detect_urls(text)
     if urls:
         await message.reply_text("⏳ Processing link...")
-        source_id = await personal.handle_dm_link(tg_user_id, urls[0], text)
-        if source_id:
-            await message.reply_text(f"✅ Link saved to your personal sources (#{source_id})")
+        summary = await personal.extract_link_summary(urls[0], text)
+        if summary:
+            await _send_llm_response(update, summary)
         else:
-            await message.reply_text("⚠️ Link saved but extraction may have failed.")
+            await message.reply_text("⚠️ Couldn't extract content from this link.")
         return
 
     # Plain text — prompt for /note
