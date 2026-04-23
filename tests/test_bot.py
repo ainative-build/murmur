@@ -464,18 +464,20 @@ class TestProcessLinksAndStore:
 
     @pytest.mark.asyncio
     async def test_process_links_handles_agent_error(self):
-        """Should handle agent errors gracefully."""
+        """Should handle agent errors gracefully with TinyFish fallback."""
         mock_message = Mock()
         mock_message.reply_text = AsyncMock()
 
         with patch('bot.run_agent', new_callable=AsyncMock) as mock_agent:
             with patch('bot.logger') as mock_logger:
+                # Agent fails, TinyFish fallback also returns None
                 mock_agent.return_value = "Error: Failed to process"
+                with patch('tools.tinyfish_fetcher.fetch_url_content', new_callable=AsyncMock, return_value=None):
+                    await bot._process_links_and_store(mock_message, "text", ["https://example.com"], 42)
 
-                await bot._process_links_and_store(mock_message, "text", ["https://example.com"], 42)
-
-                # Should log the error
-                mock_logger.error.assert_called()
+                    # Should log warning and reply with error
+                    mock_logger.warning.assert_called()
+                    mock_message.reply_text.assert_called()
 
     @pytest.mark.asyncio
     async def test_process_links_replies_with_summary(self):

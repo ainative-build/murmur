@@ -74,10 +74,11 @@ class TestExtractLinkSummary:
 
     @pytest.mark.asyncio
     async def test_extract_link_summary_agent_error(self):
-        """Returns None on agent error."""
+        """Falls back to TinyFish on agent error; returns None if both fail."""
         with patch('personal.run_agent', new_callable=AsyncMock, return_value="Error: Failed to fetch"):
-            result = await personal.extract_link_summary("https://example.com", "text")
-            assert result is None
+            with patch('tools.tinyfish_fetcher.fetch_url_content', new_callable=AsyncMock, return_value=None):
+                result = await personal.extract_link_summary("https://example.com", "text")
+                assert result is None
 
     @pytest.mark.asyncio
     async def test_extract_link_summary_exception(self):

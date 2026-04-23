@@ -321,12 +321,45 @@ async def _process_links_and_store(
                 for sent in sent_msgs:
                     db.schedule_message_deletion(sent.chat_id, sent.message_id, delete_after)
         elif isinstance(agent_result, str):
-            logger.error(f"Agent error for {urls[0]}: {agent_result}")
-            # Give specific feedback based on error type
-            if "X Article" in agent_result or "requires login" in agent_result:
-                await message.reply_text("⚠️ This is an X Article — requires login to view, can't be extracted by bots.")
+            logger.warning(f"Agent failed for {url[:60]}: {agent_result[:100]}")
+            # TinyFish fallback — try extracting content directly
+            from tools.tinyfish_fetcher import fetch_url_content
+            tf_content = await fetch_url_content(url)
+            if tf_content and len(tf_content) > 100:
+                try:
+                    from baml_client import b as baml_b
+                    from baml_client.types import ContentType as CT
+                    sr = baml_b.SummarizeContent(content=tf_content, content_type=CT.Webpage, context=f"Content from {url}")
+                    fallback_title = getattr(sr, "title", "Summary")
+                    kp = getattr(sr, "key_points", [])
+                    cs = getattr(sr, "concise_summary", "")
+                    fallback_summary = f"# {fallback_title}\n\n"
+                    if kp:
+                        fallback_summary += "## Key Points:\n" + "".join(f"- {p}\n" for p in kp) + "\n"
+                    fallback_summary += f"## Summary:\n{cs}"
+                    # Store + reply with fallback summary
+                    if message_id:
+                        db.store_link_summary(message_id=message_id, url=url, link_type=link_type, title=fallback_title, summary=fallback_summary)
+                    formatted = md_to_telegram_html(fallback_summary)
+                    sent_msgs = []
+                    for i in range(0, len(formatted), MAX_TELEGRAM_MSG_LEN):
+                        chunk = formatted[i:i + MAX_TELEGRAM_MSG_LEN]
+                        try:
+                            sent = await message.reply_text(chunk, parse_mode=ParseMode.HTML)
+                            sent_msgs.append(sent)
+                        except Exception:
+                            await message.reply_text(fallback_summary[i:i + MAX_TELEGRAM_MSG_LEN])
+                    if sent_msgs:
+                        from datetime import timedelta
+                        delete_after = datetime.now(timezone.utc) + timedelta(hours=24)
+                        for sent in sent_msgs:
+                            db.schedule_message_deletion(sent.chat_id, sent.message_id, delete_after)
+                    logger.info(f"TinyFish fallback succeeded for {url[:60]}")
+                except Exception as tf_err:
+                    logger.error(f"TinyFish fallback summarization failed: {tf_err}")
+                    await message.reply_text("⚠️ Couldn't extract content from this link.")
             else:
-                await message.reply_text("⚠️ Couldn't extract content from this link (may require login or has bot protection).")
+                await message.reply_text("⚠️ Couldn't extract content from this link.")
         else:
             logger.error(f"Agent returned {type(agent_result)} for {urls[0]}")
 
