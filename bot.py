@@ -111,7 +111,12 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     tg_user_id = message.from_user.id if message.from_user else 0
-    username = message.from_user.username if message.from_user else None
+    # Use username if available, otherwise fall back to first_name (e.g. "Alice")
+    username = (
+        message.from_user.username
+        or message.from_user.first_name
+        if message.from_user else None
+    )
     tg_chat_id = message.chat_id
     tg_msg_id = message.message_id
     timestamp = message.date or datetime.now(timezone.utc)
