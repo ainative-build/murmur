@@ -190,8 +190,8 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await _process_links_and_store(message, text, urls, message_id)
 
         # Auto-summarize file attachments (not voice — voice is silent)
-        # Only if extracted text is 1K-10K chars (sweet spot for summarization)
-        if media_type == "file" and file_text and 1000 < len(file_text) < 10000:
+        # Only if extracted text is 1K+ chars (already truncated to 10K by file_extractor)
+        if media_type == "file" and file_text and len(file_text) >= 1000:
             await _summarize_and_reply_file(message, file_text, source_filename)
     finally:
         # Clean up dedup set (allow reprocessing if message is sent again later)
