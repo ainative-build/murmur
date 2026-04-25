@@ -632,6 +632,42 @@ class TestProcessLinksAndStore:
                 mock_store_link.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_process_links_no_summary_on_partial_delivery(self):
+        """Partial delivery (some chunks sent, later chunks fail) must NOT
+        write the delivered signal — otherwise retries skip and the user is
+        permanently stuck with a truncated reply.
+        """
+        # First reply call (chunk 1) succeeds; subsequent calls (chunk 2 HTML
+        # + chunk 2 plain-text fallback) all fail.
+        call_count = {"n": 0}
+
+        async def reply_side_effect(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return Mock()
+            raise Exception("Telegram error mid-stream")
+
+        mock_message = Mock()
+        mock_message.reply_text = AsyncMock(side_effect=reply_side_effect)
+
+        # Long enough to require multiple chunks
+        long_response = "X" * (bot.MAX_TELEGRAM_MSG_LEN * 2 + 100)
+
+        with patch('bot.run_agent', new_callable=AsyncMock) as mock_agent:
+            with patch('bot.db.store_link_summary') as mock_store_link:
+                with patch('bot.db.schedule_message_deletion') as mock_sched:
+                    mock_agent.return_value = long_response
+
+                    await bot._process_links_and_store(
+                        mock_message, "text", ["https://example.com"], 42
+                    )
+
+                    # No delivered signal: chunk 2 failed, so fully_delivered=False
+                    mock_store_link.assert_not_called()
+                    # But the chunk that DID land still gets scheduled for cleanup
+                    assert mock_sched.called
+
+    @pytest.mark.asyncio
     async def test_process_links_skips_tinyfish_for_youtube_on_error(self):
         """When agent fails for a YouTube URL, do NOT fall back to TinyFish.
 
@@ -691,3 +727,81 @@ class TestProcessLinksAndStore:
 
                 # Should be called multiple times for chunks
                 assert mock_message.reply_text.call_count >= 2
+
+
+class TestSendChunksWithHtmlFallback:
+    """Unit tests for `_send_chunks_with_html_fallback`."""
+
+    @pytest.mark.asyncio
+    async def test_all_chunks_succeed_via_html(self):
+        """Every HTML chunk lands → fully_delivered=True, all sends captured."""
+        mock_message = Mock()
+        mock_message.reply_text = AsyncMock()
+
+        sent, ok = await bot._send_chunks_with_html_fallback(
+            mock_message, "short html", "short plain"
+        )
+        assert ok is True
+        assert len(sent) == 1
+
+    @pytest.mark.asyncio
+    async def test_plain_text_fallback_is_captured_in_sent_msgs(self):
+        """When HTML send raises and plain-text fallback succeeds, the
+        plain-text send is captured in sent_msgs and fully_delivered stays True.
+
+        Without this, a successful plain-text fallback delivery would not write
+        the link_summary signal, and a webhook retry would resend duplicate
+        replies to the user.
+        """
+        # HTML attempt (with kwargs) raises; plain-text attempt (no kwargs) succeeds.
+        async def reply_side_effect(text, **kwargs):
+            if kwargs:  # parse_mode passed → HTML attempt
+                raise Exception("HTML parse failed")
+            return Mock()
+
+        mock_message = Mock()
+        mock_message.reply_text = AsyncMock(side_effect=reply_side_effect)
+
+        sent, ok = await bot._send_chunks_with_html_fallback(
+            mock_message, "<bad>html</bad>", "plain text"
+        )
+        assert ok is True
+        assert len(sent) == 1
+
+    @pytest.mark.asyncio
+    async def test_partial_delivery_marks_not_fully_delivered(self):
+        """First chunk lands, later chunk fails on both HTML and plain-text →
+        fully_delivered=False so caller skips writing the delivered signal."""
+        call_count = {"n": 0}
+
+        async def reply_side_effect(*args, **kwargs):
+            call_count["n"] += 1
+            # call 1: chunk 1 HTML succeeds
+            # call 2: chunk 2 HTML fails
+            # call 3: chunk 2 plain-text fails
+            if call_count["n"] == 1:
+                return Mock()
+            raise Exception("Telegram error")
+
+        mock_message = Mock()
+        mock_message.reply_text = AsyncMock(side_effect=reply_side_effect)
+
+        long_html = "X" * (bot.MAX_TELEGRAM_MSG_LEN * 2 + 50)
+        sent, ok = await bot._send_chunks_with_html_fallback(
+            mock_message, long_html, long_html
+        )
+        assert ok is False
+        # First chunk did land; subsequent chunk failed both attempts
+        assert len(sent) == 1
+
+    @pytest.mark.asyncio
+    async def test_total_failure_returns_empty_and_not_delivered(self):
+        """All HTML and plain-text attempts fail → empty sent_msgs, not delivered."""
+        mock_message = Mock()
+        mock_message.reply_text = AsyncMock(side_effect=Exception("Telegram down"))
+
+        sent, ok = await bot._send_chunks_with_html_fallback(
+            mock_message, "html", "plain"
+        )
+        assert ok is False
+        assert sent == []

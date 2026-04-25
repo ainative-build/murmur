@@ -303,6 +303,38 @@ async def _handle_grok_link(url: str) -> str:
         return f"Error: Failed to summarize Grok conversation: {e}"
 
 
+async def _send_chunks_with_html_fallback(
+    message, html_text: str, plain_text: str
+) -> tuple[list, bool]:
+    """Send a long reply in HTML chunks; per-chunk plain-text fallback on HTML failure.
+
+    Returns ``(sent_messages, fully_delivered)``. ``fully_delivered`` is True
+    only when EVERY chunk landed (via HTML or plain-text fallback). Callers gate
+    the "delivered" persistence signal on this flag — partial deliveries leave
+    no signal so a webhook retry can re-attempt the full reply, and successful
+    plain-text fallbacks ARE captured so retries don't double-send.
+    """
+    sent_msgs = []
+    fully_delivered = True
+    for i in range(0, len(html_text), MAX_TELEGRAM_MSG_LEN):
+        chunk = html_text[i:i + MAX_TELEGRAM_MSG_LEN]
+        try:
+            sent = await message.reply_text(chunk, parse_mode=ParseMode.HTML)
+            sent_msgs.append(sent)
+        except Exception:
+            try:
+                raw_chunk = plain_text[i:i + MAX_TELEGRAM_MSG_LEN]
+                sent = await message.reply_text(raw_chunk)
+                sent_msgs.append(sent)
+            except Exception as e:
+                logger.error(f"Failed to send chunk {len(sent_msgs) + 1}: {e}")
+                fully_delivered = False
+                break
+        if i + MAX_TELEGRAM_MSG_LEN < len(html_text):
+            await asyncio.sleep(0.5)
+    return sent_msgs, fully_delivered
+
+
 async def _process_links_and_store(
     message, text: str, urls: list[str], message_id: Optional[int]
 ) -> None:
@@ -331,30 +363,17 @@ async def _process_links_and_store(
             if lines and lines[0].startswith("#"):
                 title = lines[0].lstrip("#").strip()
 
-            # Send reply chunks first; defer link_summary persistence until at least
-            # one chunk is delivered. This makes link_summary the "fully delivered"
-            # signal for cross-instance webhook-retry dedup — if the reply never
-            # lands, no signal is written, so a future retry can re-attempt.
+            # Send reply chunks first; defer link_summary persistence until the
+            # full reply lands. link_summary existence is the cross-instance
+            # "fully delivered" signal — partial delivery (some chunks sent,
+            # later chunk failed) leaves the user with a truncated reply, so
+            # leave no signal and let a retry redeliver completely.
             formatted = md_to_telegram_html(agent_result)
-            sent_msgs = []
-            for i in range(0, len(formatted), MAX_TELEGRAM_MSG_LEN):
-                chunk = formatted[i:i + MAX_TELEGRAM_MSG_LEN]
-                try:
-                    sent = await message.reply_text(chunk, parse_mode=ParseMode.HTML)
-                    sent_msgs.append(sent)
-                except Exception:
-                    # Fallback to plain text if HTML parsing fails
-                    try:
-                        raw_chunk = agent_result[i:i + MAX_TELEGRAM_MSG_LEN]
-                        sent = await message.reply_text(raw_chunk)
-                        sent_msgs.append(sent)
-                    except Exception as e:
-                        logger.error(f"Failed to send chunk: {e}")
-                        break
-                if i + MAX_TELEGRAM_MSG_LEN < len(formatted):
-                    await asyncio.sleep(0.5)
+            sent_msgs, fully_delivered = await _send_chunks_with_html_fallback(
+                message, formatted, agent_result
+            )
 
-            if message_id and sent_msgs:
+            if message_id and fully_delivered and sent_msgs:
                 db.store_link_summary(
                     message_id=message_id,
                     url=url,
@@ -363,7 +382,7 @@ async def _process_links_and_store(
                     summary=agent_result,
                 )
 
-            # Schedule deletion after 1 hour via Supabase (survives container restarts)
+            # Schedule deletion for whatever DID get sent (partial cleanup OK).
             if sent_msgs:
                 from datetime import timedelta
                 delete_after = datetime.now(timezone.utc) + timedelta(hours=24)
@@ -395,18 +414,15 @@ async def _process_links_and_store(
                     if kp:
                         fallback_summary += "## Key Points:\n" + "".join(f"- {p}\n" for p in kp) + "\n"
                     fallback_summary += f"## Summary:\n{cs}"
-                    # Send reply first; persist link_summary only after delivery
-                    # so retries with no summary signal can re-attempt.
+                    # Send reply first; persist link_summary only after the full
+                    # reply lands. Mirrors the primary path: partial delivery →
+                    # no signal, plain-text fallback successes ARE captured so
+                    # they don't trigger a duplicate resend on retry.
                     formatted = md_to_telegram_html(fallback_summary)
-                    sent_msgs = []
-                    for i in range(0, len(formatted), MAX_TELEGRAM_MSG_LEN):
-                        chunk = formatted[i:i + MAX_TELEGRAM_MSG_LEN]
-                        try:
-                            sent = await message.reply_text(chunk, parse_mode=ParseMode.HTML)
-                            sent_msgs.append(sent)
-                        except Exception:
-                            await message.reply_text(fallback_summary[i:i + MAX_TELEGRAM_MSG_LEN])
-                    if message_id and sent_msgs:
+                    sent_msgs, fully_delivered = await _send_chunks_with_html_fallback(
+                        message, formatted, fallback_summary
+                    )
+                    if message_id and fully_delivered and sent_msgs:
                         db.store_link_summary(message_id=message_id, url=url, link_type=link_type, title=fallback_title, summary=fallback_summary)
                     if sent_msgs:
                         from datetime import timedelta
