@@ -2,15 +2,27 @@
 
 ## Quick Start
 
-Run all tests:
 ```bash
-uv run python -m pytest tests/ -v
+make test-unit          # Fast — no DB, no docker. ~5s.
+make test-db-up         # Bring up Postgres on :5433 + apply migrations.
+make test-integration   # Run integration suite against real Postgres.
+make test-all           # Both, in order.
+make test-db-down       # Tear down test Postgres.
 ```
 
 Run with coverage:
 ```bash
 uv run python -m pytest tests/ --cov=. --cov-report=html
 ```
+
+## Test Tiers
+
+| Tier | Marker | Mocks | Real | Where | When |
+|------|--------|-------|------|-------|------|
+| Unit | (default) | Supabase, Telegram, all tools | nothing | `tests/test_*.py` | Always (PR + push) |
+| Integration | `@pytest.mark.integration` | LLMs, extractors, Telegram outbound | Postgres, FastAPI app, PTB dispatch | `tests/integration/` | PR + push (with services) |
+
+The `addopts` in `pytest.ini` deselects `-m integration` by default, so a bare `pytest tests/` runs unit only. Integration tests opt in via `make test-integration` or pytest's `-m integration` flag.
 
 View coverage report:
 ```bash
@@ -147,18 +159,55 @@ Available fixtures for use in tests:
 - HTML: `htmlcov/index.html` (open in browser)
 - JSON: `coverage.json` (for CI/CD integration)
 
-## Next Phase Testing
+## Integration Tests
 
-### Phase 2 (Catchup & Search)
-- Integration tests with `TestClient`
-- Webhook endpoint tests
-- Database query tests
-- Agent (langgraph) tests
+Integration tests drive the bot through synthetic Telegram webhook payloads
+against a real Postgres + the FastAPI app + PTB dispatch. External services
+(LLMs, extractors, Telegram outbound) are mocked at the import boundary.
 
-### Phase 3+ (Export, Topics, Decision)
-- New handler function tests
-- Complex query scenario tests
-- Performance benchmarks
+### Layout
+```
+tests/integration/
+  conftest.py             # fixtures: test_db, tg_client, recording_bot, mock_llms, mock_extractors
+  recording_bot.py        # Bot subclass that records calls, never hits the network
+  factories.py            # synthetic Telegram update payload builders
+  llm_fixtures.py         # canned BAML / Gemini responses
+  extractor_fixtures.py   # canned Tavily / TinyFish / AgentQL / etc. content
+  supabase_shim.py        # psycopg-backed shim for the supabase-py client surface used in db.py
+  test_smoke.py           # Phase 1 smoke — health, webhook auth, real-HTTP backstop, RecordingBot
+  # phase 2+ tests added incrementally
+```
+
+### Key fixtures
+
+| Fixture | Scope | Purpose |
+|---------|-------|---------|
+| `test_db_dsn` | session | DSN for test Postgres |
+| `test_db` | function | psycopg connection that truncates user tables before each test |
+| `recording_bot` | function | fresh `RecordingBot` instance |
+| `bot_app` | function | FastAPI app with PTB wired to `recording_bot` |
+| `tg_client` | function | TestClient + `post_update(payload)` helper that sets the secret header |
+| `dispatcher` | function | direct `process_update` bypass of HTTP layer (faster) |
+| `mock_llms` | function | `LLMMockConfig` — set `.summary`, `.route`, `.catchup`, etc. per-test |
+| `mock_extractors` | function | `ExtractorMockConfig` — set `.tavily_results`, `.tinyfish_content`, etc. per-test |
+| `disable_real_http` | autouse | raises if any test attempts a real `httpx` call |
+
+### Test fixtures matrix
+
+Every test pins down its inputs (URL / file / voice / image) by stable fixture
+ID. See [plans/260425-2118-integration-test-infrastructure/test-fixtures-matrix.md](plans/260425-2118-integration-test-infrastructure/test-fixtures-matrix.md)
+for the full catalog (link types, file formats, voice variants, image variants,
+DM seeded state, mocked LLM responses).
+
+### Local prerequisites
+- Docker Desktop running
+- Port 5433 free (override with `MURMUR_TEST_DB_PORT`)
+- `uv sync` to install `psycopg[binary]`
+
+### Plan
+- See [plans/260425-2118-integration-test-infrastructure/plan.md](plans/260425-2118-integration-test-infrastructure/plan.md) for the
+  full integration-test rollout: Phase 1 (this — infra), Phase 2 (group flows),
+  Phase 3 (DM flows), Phase 4 (dedup + cross-cutting), Phase 5 (CI).
 
 ---
 

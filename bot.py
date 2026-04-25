@@ -616,6 +616,25 @@ async def _safe_process_update(update: Update) -> None:
         logger.error(f"Update processing failed: {e}", exc_info=True)
 
 
+def _build_ptb_app(bot=None) -> Application:
+    """Construct the PTB Application with handlers registered.
+
+    Production: pass `bot=None`, lifespan builds the real Bot from BOT_TOKEN.
+    Tests: pass a `RecordingBot` (or any Bot-compatible shim) to capture
+    outbound calls without touching the Telegram API.
+
+    PTB enforces token XOR bot in the builder; we choose accordingly.
+    """
+    builder = Application.builder()
+    if bot is not None:
+        builder = builder.bot(bot)
+    else:
+        builder = builder.token(config.BOT_TOKEN or "test-token")
+    app = builder.build()
+    _register_handlers(app)
+    return app
+
+
 # --- FastAPI Lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -627,9 +646,9 @@ async def lifespan(app: FastAPI):
         logger.critical("TELEGRAM_BOT_TOKEN not set. Cannot start.")
         raise RuntimeError("TELEGRAM_BOT_TOKEN required")
 
-    ptb_app = Application.builder().token(config.BOT_TOKEN).build()
+    # If a test injected an app via app.state.ptb_app, reuse it; else build one.
+    ptb_app = getattr(app.state, "ptb_app", None) or _build_ptb_app()
     await ptb_app.initialize()
-    _register_handlers(ptb_app)
     await ptb_app.start()
 
     polling_task = None
