@@ -99,23 +99,22 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=False):
-            with patch('bot.db.store_message') as mock_store_msg:
-                with patch('bot.db.upsert_user'):
-                    with patch('bot.db.ensure_user_chat_state'):
-                        mock_store_msg.return_value = 42
+        with patch('bot.db.store_message') as mock_store_msg:
+            with patch('bot.db.upsert_user'):
+                with patch('bot.db.ensure_user_chat_state'):
+                    mock_store_msg.return_value = 42
 
-                        await bot.group_message_handler(mock_update, mock_context)
+                    await bot.group_message_handler(mock_update, mock_context)
 
-                        # Verify store_message was called with correct data
-                        mock_store_msg.assert_called_once()
-                        call_kwargs = mock_store_msg.call_args[1]
-                        assert call_kwargs["tg_msg_id"] == 123
-                        assert call_kwargs["tg_chat_id"] == 456
-                        assert call_kwargs["tg_user_id"] == 789
-                        assert call_kwargs["username"] == "testuser"
-                        assert call_kwargs["text"] == "Hello everyone"
-                        assert call_kwargs["has_links"] is False
+                    # Verify store_message was called with correct data
+                    mock_store_msg.assert_called_once()
+                    call_kwargs = mock_store_msg.call_args[1]
+                    assert call_kwargs["tg_msg_id"] == 123
+                    assert call_kwargs["tg_chat_id"] == 456
+                    assert call_kwargs["tg_user_id"] == 789
+                    assert call_kwargs["username"] == "testuser"
+                    assert call_kwargs["text"] == "Hello everyone"
+                    assert call_kwargs["has_links"] is False
 
     @pytest.mark.asyncio
     async def test_handler_detects_links(self):
@@ -137,18 +136,17 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=False):
-            with patch('bot.db.store_message') as mock_store_msg:
-                with patch('bot.db.upsert_user'):
-                    with patch('bot.db.ensure_user_chat_state'):
-                        with patch('bot._process_links_and_store', new_callable=AsyncMock):
-                            mock_store_msg.return_value = 42
+        with patch('bot.db.store_message') as mock_store_msg:
+            with patch('bot.db.upsert_user'):
+                with patch('bot.db.ensure_user_chat_state'):
+                    with patch('bot._process_links_and_store', new_callable=AsyncMock):
+                        mock_store_msg.return_value = 42
 
-                            await bot.group_message_handler(mock_update, mock_context)
+                        await bot.group_message_handler(mock_update, mock_context)
 
-                            # Verify has_links is set to True
-                            call_kwargs = mock_store_msg.call_args[1]
-                            assert call_kwargs["has_links"] is True
+                        # Verify has_links is set to True
+                        call_kwargs = mock_store_msg.call_args[1]
+                        assert call_kwargs["has_links"] is True
 
     @pytest.mark.asyncio
     async def test_handler_stores_user_data(self):
@@ -171,17 +169,16 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=False):
-            with patch('bot.db.store_message') as mock_store_msg:
-                with patch('bot.db.upsert_user') as mock_upsert_user:
-                    with patch('bot.db.ensure_user_chat_state') as mock_ensure_state:
-                        mock_store_msg.return_value = 42
+        with patch('bot.db.store_message') as mock_store_msg:
+            with patch('bot.db.upsert_user') as mock_upsert_user:
+                with patch('bot.db.ensure_user_chat_state') as mock_ensure_state:
+                    mock_store_msg.return_value = 42
 
-                        await bot.group_message_handler(mock_update, mock_context)
+                    await bot.group_message_handler(mock_update, mock_context)
 
-                        # Verify user functions were called
-                        mock_upsert_user.assert_called_once_with(789, "testuser")
-                        mock_ensure_state.assert_called_once_with(789, 456)
+                    # Verify user functions were called
+                    mock_upsert_user.assert_called_once_with(789, "testuser")
+                    mock_ensure_state.assert_called_once_with(789, 456)
 
     @pytest.mark.asyncio
     async def test_handler_calls_agent_on_links(self):
@@ -203,26 +200,27 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=False):
-            with patch('bot.db.store_message') as mock_store_msg:
-                with patch('bot.db.upsert_user'):
-                    with patch('bot.db.ensure_user_chat_state'):
-                        with patch('bot._process_links_and_store', new_callable=AsyncMock) as mock_process:
-                            mock_store_msg.return_value = 42  # Non-None means message was stored
+        with patch('bot.db.store_message') as mock_store_msg:
+            with patch('bot.db.upsert_user'):
+                with patch('bot.db.ensure_user_chat_state'):
+                    with patch('bot._process_links_and_store', new_callable=AsyncMock) as mock_process:
+                        mock_store_msg.return_value = 42  # Non-None means message was stored
 
-                            await bot.group_message_handler(mock_update, mock_context)
+                        await bot.group_message_handler(mock_update, mock_context)
 
-                            # Verify process_links was called
-                            mock_process.assert_called_once()
+                        # Verify process_links was called
+                        mock_process.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_handler_runs_agent_on_transient_db_failure(self):
-        """Agent runs when message_exists=False and store_message returns None (DB error).
+        """Agent still runs when store_message AND get_message_id both return None.
 
-        Distinguishes transient DB write failure from a duplicate webhook retry:
-        message_exists=False means the message is not in DB, so even if
-        store_message fails, we should still try to summarize the link.
+        That combination means the row genuinely isn't in DB — this is a real
+        write failure, not a duplicate retry. Proceed best-effort rather than
+        silently dropping a valid summary.
         """
+        bot._processing_messages.clear()
+
         mock_user = Mock()
         mock_user.id = 789
 
@@ -240,28 +238,26 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=False):
-            with patch('bot.db.store_message') as mock_store_msg:
+        with patch('bot.db.store_message', return_value=None):
+            with patch('bot.db.get_message_id', return_value=None):
                 with patch('bot.db.upsert_user'):
                     with patch('bot.db.ensure_user_chat_state'):
                         with patch('bot._process_links_and_store', new_callable=AsyncMock) as mock_process:
-                            mock_store_msg.return_value = None  # transient DB failure
-
                             await bot.group_message_handler(mock_update, mock_context)
 
-                            # Agent pipeline still called with message_id=None
+                            # Agent pipeline still called with message_id=None (best-effort)
                             mock_process.assert_called_once()
                             assert mock_process.call_args[0][3] is None
 
     @pytest.mark.asyncio
-    async def test_handler_skips_duplicate_webhook_retry(self):
-        """Handler should skip processing when message already exists in DB.
+    async def test_handler_skips_retry_when_summary_already_delivered(self):
+        """Duplicate webhook with a stored link_summary → already delivered → skip.
 
-        Webhook retries that arrive after the original processing finished (or hit
-        a different container instance) would otherwise re-process the same message
-        and post a duplicate summary in the group.
+        The atomic claim (store_message INSERT...ON CONFLICT) returns None on
+        retry. get_message_id finds the existing row, has_link_summary returns
+        True (because the original attempt got far enough to send the reply
+        and persist the summary afterwards), so we skip — preventing duplicates.
         """
-        # Reset in-memory dedup so this test can run independently
         bot._processing_messages.clear()
 
         mock_user = Mock()
@@ -281,16 +277,87 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=True) as mock_exists:
-            with patch('bot.db.store_message') as mock_store_msg:
-                with patch('bot._process_links_and_store', new_callable=AsyncMock) as mock_process:
-                    await bot.group_message_handler(mock_update, mock_context)
+        with patch('bot.db.store_message', return_value=None):  # claim lost (duplicate)
+            with patch('bot.db.get_message_id', return_value=42) as mock_get_id:
+                with patch('bot.db.has_link_summary', return_value=True) as mock_has:
+                    with patch('bot.db.upsert_user') as mock_upsert:
+                        with patch('bot._process_links_and_store', new_callable=AsyncMock) as mock_process:
+                            await bot.group_message_handler(mock_update, mock_context)
 
-                    # DB dedup check happened
-                    mock_exists.assert_called_once_with(888, 999)
-                    # Skipped storage and processing
-                    mock_store_msg.assert_not_called()
-                    mock_process.assert_not_called()
+                            mock_get_id.assert_called_once_with(888, 999)
+                            mock_has.assert_called_once_with(42)
+                            mock_process.assert_not_called()
+                            # Skip path returns before user/chat state writes
+                            mock_upsert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handler_retries_when_prior_attempt_left_no_summary(self):
+        """Duplicate webhook with NO link_summary → prior attempt died before
+        delivery → retry processes (prevents permanent drop on partial failures).
+        """
+        bot._processing_messages.clear()
+
+        mock_user = Mock()
+        mock_user.id = 789
+
+        mock_message = Mock()
+        mock_message.from_user = mock_user
+        mock_message.message_id = 1001
+        mock_message.chat_id = 2002
+        mock_message.text = "Check: https://example.com"
+        mock_message.date = datetime.now(timezone.utc)
+        mock_message.reply_to_message = None
+        mock_message.forward_origin = None
+
+        mock_update = Mock()
+        mock_update.effective_message = mock_message
+
+        mock_context = Mock()
+
+        with patch('bot.db.store_message', return_value=None):  # claim lost
+            with patch('bot.db.get_message_id', return_value=77):  # row exists
+                with patch('bot.db.has_link_summary', return_value=False):  # but never delivered
+                    with patch('bot.db.upsert_user'):
+                        with patch('bot.db.ensure_user_chat_state'):
+                            with patch('bot._process_links_and_store', new_callable=AsyncMock) as mock_process:
+                                await bot.group_message_handler(mock_update, mock_context)
+
+                                # Retry runs the pipeline with the existing message_id
+                                mock_process.assert_called_once()
+                                assert mock_process.call_args[0][3] == 77
+
+    @pytest.mark.asyncio
+    async def test_handler_skips_retry_for_no_link_messages(self):
+        """Duplicate webhook for a no-link message → nothing user-visible to
+        re-deliver → skip (avoids re-running media analysis on every retry)."""
+        bot._processing_messages.clear()
+
+        mock_user = Mock()
+        mock_user.id = 789
+
+        mock_message = Mock()
+        mock_message.from_user = mock_user
+        mock_message.message_id = 3003
+        mock_message.chat_id = 4004
+        mock_message.text = "Just chatting, no links"
+        mock_message.date = datetime.now(timezone.utc)
+        mock_message.reply_to_message = None
+        mock_message.forward_origin = None
+
+        mock_update = Mock()
+        mock_update.effective_message = mock_message
+
+        mock_context = Mock()
+
+        with patch('bot.db.store_message', return_value=None):  # claim lost
+            with patch('bot.db.get_message_id', return_value=55):  # row exists
+                with patch('bot.db.has_link_summary') as mock_has:
+                    with patch('bot.db.upsert_user') as mock_upsert:
+                        await bot.group_message_handler(mock_update, mock_context)
+
+                        # Without links, has_link_summary doesn't even need to be checked
+                        mock_has.assert_not_called()
+                        mock_upsert.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_handler_skips_agent_if_no_links(self):
@@ -312,17 +379,16 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=False):
-            with patch('bot.db.store_message') as mock_store_msg:
-                with patch('bot.db.upsert_user'):
-                    with patch('bot.db.ensure_user_chat_state'):
-                        with patch('bot._process_links_and_store', new_callable=AsyncMock) as mock_process:
-                            mock_store_msg.return_value = 42
+        with patch('bot.db.store_message') as mock_store_msg:
+            with patch('bot.db.upsert_user'):
+                with patch('bot.db.ensure_user_chat_state'):
+                    with patch('bot._process_links_and_store', new_callable=AsyncMock) as mock_process:
+                        mock_store_msg.return_value = 42
 
-                            await bot.group_message_handler(mock_update, mock_context)
+                        await bot.group_message_handler(mock_update, mock_context)
 
-                            # Verify process_links was NOT called
-                            mock_process.assert_not_called()
+                        # Verify process_links was NOT called
+                        mock_process.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_handler_handles_no_message(self):
@@ -364,9 +430,8 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=False):
-            # Should not raise
-            await bot.group_message_handler(mock_update, mock_context)
+        # Should not raise — empty text returns before any DB calls
+        await bot.group_message_handler(mock_update, mock_context)
 
     @pytest.mark.asyncio
     async def test_handler_handles_no_from_user(self):
@@ -385,17 +450,16 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=False):
-            with patch('bot.db.store_message') as mock_store_msg:
-                with patch('bot.db.upsert_user'):
-                    with patch('bot.db.ensure_user_chat_state'):
-                        mock_store_msg.return_value = 42
+        with patch('bot.db.store_message') as mock_store_msg:
+            with patch('bot.db.upsert_user'):
+                with patch('bot.db.ensure_user_chat_state'):
+                    mock_store_msg.return_value = 42
 
-                        await bot.group_message_handler(mock_update, mock_context)
+                    await bot.group_message_handler(mock_update, mock_context)
 
-                        # Should use tg_user_id = 0 for None user
-                        call_kwargs = mock_store_msg.call_args[1]
-                        assert call_kwargs["tg_user_id"] == 0
+                    # Should use tg_user_id = 0 for None user
+                    call_kwargs = mock_store_msg.call_args[1]
+                    assert call_kwargs["tg_user_id"] == 0
 
     @pytest.mark.asyncio
     async def test_handler_with_reply_to_message(self):
@@ -420,16 +484,15 @@ class TestGroupMessageHandler:
 
         mock_context = Mock()
 
-        with patch('bot.db.message_exists', return_value=False):
-            with patch('bot.db.store_message') as mock_store_msg:
-                with patch('bot.db.upsert_user'):
-                    with patch('bot.db.ensure_user_chat_state'):
-                        mock_store_msg.return_value = 42
+        with patch('bot.db.store_message') as mock_store_msg:
+            with patch('bot.db.upsert_user'):
+                with patch('bot.db.ensure_user_chat_state'):
+                    mock_store_msg.return_value = 42
 
-                        await bot.group_message_handler(mock_update, mock_context)
+                    await bot.group_message_handler(mock_update, mock_context)
 
-                        call_kwargs = mock_store_msg.call_args[1]
-                        assert call_kwargs["reply_to_tg_msg_id"] == 100
+                    call_kwargs = mock_store_msg.call_args[1]
+                    assert call_kwargs["reply_to_tg_msg_id"] == 100
 
 
 class TestURLDetectionRegex:
@@ -542,6 +605,31 @@ class TestProcessLinksAndStore:
                     # Should log warning and reply with error
                     mock_logger.warning.assert_called()
                     mock_message.reply_text.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_process_links_stores_summary_only_after_reply_success(self):
+        """link_summary must be stored AFTER reply succeeds, not before.
+
+        This ordering makes link_summary the cross-instance "summary delivered"
+        signal: if reply fails entirely (no sent_msgs), no link_summary is
+        stored, leaving the door open for a webhook retry to re-attempt.
+        """
+        mock_message = Mock()
+        # reply_text raises on every call → sent_msgs stays empty
+        mock_message.reply_text = AsyncMock(side_effect=Exception("Telegram down"))
+
+        with patch('bot.run_agent', new_callable=AsyncMock) as mock_agent:
+            with patch('bot.db.store_link_summary') as mock_store_link:
+                mock_agent.return_value = "# Title\nSummary content"
+
+                await bot._process_links_and_store(
+                    mock_message, "text", ["https://example.com"], 42
+                )
+
+                # Reply attempted (and failed twice — HTML + plain-text fallback)
+                assert mock_message.reply_text.called
+                # No link_summary stored because no reply chunk landed
+                mock_store_link.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_process_links_skips_tinyfish_for_youtube_on_error(self):

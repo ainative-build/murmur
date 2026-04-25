@@ -129,15 +129,6 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     _processing_messages.add(msg_key)
 
     try:
-        # DB-based dedup: catches webhook retries that arrive at a different
-        # container instance or after a cold start (when in-memory set is empty).
-        if db.message_exists(tg_chat_id, tg_msg_id):
-            logger.info(
-                f"Skipping already-stored msg {tg_msg_id} in chat {tg_chat_id} "
-                "(webhook retry across instance/restart)"
-            )
-            return
-
         # Get text — could be message.text or message.caption (for photos/docs)
         text = message.text or message.caption or ""
         media_type = None
@@ -177,6 +168,10 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
         urls = re.findall(URL_REGEX, text)
         has_links = len(urls) > 0
 
+        # Atomic claim: store_message uses INSERT ... ON CONFLICT DO NOTHING,
+        # so concurrent webhook retries across container instances all converge
+        # on a single winning insert. The winner gets a non-None id; losers get
+        # None. This replaces the racy SELECT-then-INSERT pattern.
         message_id = db.store_message(
             tg_msg_id=tg_msg_id,
             tg_chat_id=tg_chat_id,
@@ -192,6 +187,42 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
             media_type=media_type,
             source_filename=source_filename,
         )
+
+        if message_id is None:
+            # No id from atomic insert: either a duplicate webhook retry or a
+            # transient DB error. Disambiguate via lookup.
+            existing_id = db.get_message_id(tg_chat_id, tg_msg_id)
+            if existing_id is None:
+                # Row doesn't exist → DB write actually failed. Proceed best-effort
+                # (rare; may produce a duplicate if the original eventually succeeds,
+                # but losing a summary entirely is worse).
+                logger.warning(
+                    f"store_message failed and no row exists for msg {tg_msg_id} — "
+                    "proceeding best-effort"
+                )
+            else:
+                # Duplicate webhook. The "summary delivered" signal is the existence
+                # of a link_summary row, which is written ONLY after a reply chunk
+                # is successfully sent. So:
+                #   - has_links + has_link_summary  → already delivered → skip
+                #   - has_links + no link_summary   → prior attempt died before
+                #                                     delivery → retry
+                #   - no has_links                  → media-only message; nothing
+                #                                     user-visible to retry → skip
+                if not has_links:
+                    logger.info(
+                        f"Skipping retry of duplicate msg {tg_msg_id} (no links to redeliver)"
+                    )
+                    return
+                if db.has_link_summary(existing_id):
+                    logger.info(
+                        f"Skipping retry of msg {tg_msg_id}: link summary already delivered"
+                    )
+                    return
+                logger.info(
+                    f"Retrying msg {tg_msg_id}: prior attempt left no delivered summary"
+                )
+                message_id = existing_id
 
         db.upsert_user(tg_user_id, username)
         db.ensure_user_chat_state(tg_user_id, tg_chat_id)
@@ -300,16 +331,10 @@ async def _process_links_and_store(
             if lines and lines[0].startswith("#"):
                 title = lines[0].lstrip("#").strip()
 
-            if message_id:
-                db.store_link_summary(
-                    message_id=message_id,
-                    url=url,
-                    link_type=link_type,
-                    title=title,
-                    summary=agent_result,
-                )
-
-            # Convert markdown to Telegram HTML, schedule auto-delete after 1 hour.
+            # Send reply chunks first; defer link_summary persistence until at least
+            # one chunk is delivered. This makes link_summary the "fully delivered"
+            # signal for cross-instance webhook-retry dedup — if the reply never
+            # lands, no signal is written, so a future retry can re-attempt.
             formatted = md_to_telegram_html(agent_result)
             sent_msgs = []
             for i in range(0, len(formatted), MAX_TELEGRAM_MSG_LEN):
@@ -328,6 +353,15 @@ async def _process_links_and_store(
                         break
                 if i + MAX_TELEGRAM_MSG_LEN < len(formatted):
                     await asyncio.sleep(0.5)
+
+            if message_id and sent_msgs:
+                db.store_link_summary(
+                    message_id=message_id,
+                    url=url,
+                    link_type=link_type,
+                    title=title,
+                    summary=agent_result,
+                )
 
             # Schedule deletion after 1 hour via Supabase (survives container restarts)
             if sent_msgs:
@@ -361,9 +395,8 @@ async def _process_links_and_store(
                     if kp:
                         fallback_summary += "## Key Points:\n" + "".join(f"- {p}\n" for p in kp) + "\n"
                     fallback_summary += f"## Summary:\n{cs}"
-                    # Store + reply with fallback summary
-                    if message_id:
-                        db.store_link_summary(message_id=message_id, url=url, link_type=link_type, title=fallback_title, summary=fallback_summary)
+                    # Send reply first; persist link_summary only after delivery
+                    # so retries with no summary signal can re-attempt.
                     formatted = md_to_telegram_html(fallback_summary)
                     sent_msgs = []
                     for i in range(0, len(formatted), MAX_TELEGRAM_MSG_LEN):
@@ -373,6 +406,8 @@ async def _process_links_and_store(
                             sent_msgs.append(sent)
                         except Exception:
                             await message.reply_text(fallback_summary[i:i + MAX_TELEGRAM_MSG_LEN])
+                    if message_id and sent_msgs:
+                        db.store_link_summary(message_id=message_id, url=url, link_type=link_type, title=fallback_title, summary=fallback_summary)
                     if sent_msgs:
                         from datetime import timedelta
                         delete_after = datetime.now(timezone.utc) + timedelta(hours=24)
