@@ -72,6 +72,56 @@ def store_message(
         return None
 
 
+def get_message_id(tg_chat_id: int, tg_msg_id: int) -> Optional[int]:
+    """Look up internal message id by Telegram (chat_id, msg_id). None if absent or DB error.
+
+    Used after `store_message()` returns None to disambiguate "duplicate webhook
+    retry" (row exists, return id) from "transient DB write failure" (row absent,
+    return None — caller should proceed best-effort).
+    """
+    client = get_client()
+    try:
+        result = (
+            client.table("messages")
+            .select("id")
+            .eq("tg_chat_id", tg_chat_id)
+            .eq("tg_msg_id", tg_msg_id)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return result.data[0].get("id")
+        return None
+    except Exception as e:
+        logger.warning(f"get_message_id check failed: {e}")
+        return None
+
+
+def has_link_summary(message_id: int) -> bool:
+    """True if any link_summary row exists for this message.
+
+    Used as the "summary fully delivered" signal for cross-instance webhook
+    retry dedup: link_summary is stored AFTER the Telegram reply succeeds, so
+    its presence proves a prior attempt already delivered to the user. Retries
+    that find no link_summary indicate the prior attempt died before delivery
+    and should re-run. On DB error, return False so retries still attempt
+    (better to risk a duplicate than silently drop the summary).
+    """
+    client = get_client()
+    try:
+        result = (
+            client.table("link_summaries")
+            .select("id")
+            .eq("message_id", message_id)
+            .limit(1)
+            .execute()
+        )
+        return bool(result.data)
+    except Exception as e:
+        logger.warning(f"has_link_summary check failed: {e}")
+        return False
+
+
 def store_link_summary(
     message_id: int,
     url: str,

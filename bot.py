@@ -121,71 +121,112 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     tg_msg_id = message.message_id
     timestamp = message.date or datetime.now(timezone.utc)
 
-    # Dedup: skip if this message is already being processed (webhook retry)
+    # In-memory dedup: skip concurrent retries within this process.
     msg_key = (tg_chat_id, tg_msg_id)
     if msg_key in _processing_messages:
         logger.debug(f"Skipping duplicate webhook for msg {tg_msg_id} in chat {tg_chat_id}")
         return
     _processing_messages.add(msg_key)
 
-    # Get text — could be message.text or message.caption (for photos/docs)
-    text = message.text or message.caption or ""
-    media_type = None
-    source_filename = None
-
-    # Check message content types
-    has_photo = bool(message.photo)
-    has_voice = bool(message.voice or message.audio)
-    has_document = bool(message.document)
-
-    # Voice/audio messages — transcribe with Gemini (stored silently, no reply)
-    if has_voice:
-        transcript = await _transcribe_voice(message, context)
-        if transcript:
-            text = f"[Voice: {transcript}]" + (f"\n{text}" if text else "")
-        media_type = "voice" if message.voice else "audio"
-
-    # Photo — analyze with Gemini vision
-    elif has_photo:
-        description = await _analyze_image(message, context)
-        if description:
-            text = f"[Image: {description}]" + (f"\n{text}" if text else "")
-        media_type = "photo"
-
-    # Document — extract text if supported type
-    elif has_document:
-        file_text, filename = await _extract_document_text(message, context)
-        source_filename = filename
-        if file_text:
-            text = f"[File: {filename}]\n{file_text}" + (f"\n{text}" if text else "")
-            media_type = "file"
-
-    if not text:
-        return  # Nothing to store
-
-    urls = re.findall(URL_REGEX, text)
-    has_links = len(urls) > 0
-
-    message_id = db.store_message(
-        tg_msg_id=tg_msg_id,
-        tg_chat_id=tg_chat_id,
-        tg_user_id=tg_user_id,
-        username=username,
-        text=text,
-        timestamp=timestamp,
-        has_links=has_links,
-        reply_to_tg_msg_id=message.reply_to_message.message_id if message.reply_to_message else None,
-        forwarded_from=message.forward_origin.sender_user.username if (
-            message.forward_origin and hasattr(message.forward_origin, "sender_user") and message.forward_origin.sender_user
-        ) else None,
-        media_type=media_type,
-        source_filename=source_filename,
-    )
-
-    db.upsert_user(tg_user_id, username)
-    db.ensure_user_chat_state(tg_user_id, tg_chat_id)
-
     try:
+        # Get text — could be message.text or message.caption (for photos/docs)
+        text = message.text or message.caption or ""
+        media_type = None
+        source_filename = None
+        file_text = None
+
+        # Check message content types
+        has_photo = bool(message.photo)
+        has_voice = bool(message.voice or message.audio)
+        has_document = bool(message.document)
+
+        # Voice/audio messages — transcribe with Gemini (stored silently, no reply)
+        if has_voice:
+            transcript = await _transcribe_voice(message, context)
+            if transcript:
+                text = f"[Voice: {transcript}]" + (f"\n{text}" if text else "")
+            media_type = "voice" if message.voice else "audio"
+
+        # Photo — analyze with Gemini vision
+        elif has_photo:
+            description = await _analyze_image(message, context)
+            if description:
+                text = f"[Image: {description}]" + (f"\n{text}" if text else "")
+            media_type = "photo"
+
+        # Document — extract text if supported type
+        elif has_document:
+            file_text, filename = await _extract_document_text(message, context)
+            source_filename = filename
+            if file_text:
+                text = f"[File: {filename}]\n{file_text}" + (f"\n{text}" if text else "")
+                media_type = "file"
+
+        if not text:
+            return  # Nothing to store
+
+        urls = re.findall(URL_REGEX, text)
+        has_links = len(urls) > 0
+
+        # Atomic claim: store_message uses INSERT ... ON CONFLICT DO NOTHING,
+        # so concurrent webhook retries across container instances all converge
+        # on a single winning insert. The winner gets a non-None id; losers get
+        # None. This replaces the racy SELECT-then-INSERT pattern.
+        message_id = db.store_message(
+            tg_msg_id=tg_msg_id,
+            tg_chat_id=tg_chat_id,
+            tg_user_id=tg_user_id,
+            username=username,
+            text=text,
+            timestamp=timestamp,
+            has_links=has_links,
+            reply_to_tg_msg_id=message.reply_to_message.message_id if message.reply_to_message else None,
+            forwarded_from=message.forward_origin.sender_user.username if (
+                message.forward_origin and hasattr(message.forward_origin, "sender_user") and message.forward_origin.sender_user
+            ) else None,
+            media_type=media_type,
+            source_filename=source_filename,
+        )
+
+        if message_id is None:
+            # No id from atomic insert: either a duplicate webhook retry or a
+            # transient DB error. Disambiguate via lookup.
+            existing_id = db.get_message_id(tg_chat_id, tg_msg_id)
+            if existing_id is None:
+                # Row doesn't exist → DB write actually failed. Proceed best-effort
+                # (rare; may produce a duplicate if the original eventually succeeds,
+                # but losing a summary entirely is worse).
+                logger.warning(
+                    f"store_message failed and no row exists for msg {tg_msg_id} — "
+                    "proceeding best-effort"
+                )
+            else:
+                # Duplicate webhook. The "summary delivered" signal is the existence
+                # of a link_summary row, which is written ONLY after a reply chunk
+                # is successfully sent. So:
+                #   - has_links + has_link_summary  → already delivered → skip
+                #   - has_links + no link_summary   → prior attempt died before
+                #                                     delivery → retry
+                #   - no has_links                  → media-only message; nothing
+                #                                     user-visible to retry → skip
+                if not has_links:
+                    logger.info(
+                        f"Skipping retry of duplicate msg {tg_msg_id} (no links to redeliver)"
+                    )
+                    return
+                if db.has_link_summary(existing_id):
+                    logger.info(
+                        f"Skipping retry of msg {tg_msg_id}: link summary already delivered"
+                    )
+                    return
+                logger.info(
+                    f"Retrying msg {tg_msg_id}: prior attempt left no delivered summary"
+                )
+                message_id = existing_id
+
+        db.upsert_user(tg_user_id, username)
+        db.ensure_user_chat_state(tg_user_id, tg_chat_id)
+
         if has_links:
             await _process_links_and_store(message, text, urls, message_id)
 
@@ -262,6 +303,38 @@ async def _handle_grok_link(url: str) -> str:
         return f"Error: Failed to summarize Grok conversation: {e}"
 
 
+async def _send_chunks_with_html_fallback(
+    message, html_text: str, plain_text: str
+) -> tuple[list, bool]:
+    """Send a long reply in HTML chunks; per-chunk plain-text fallback on HTML failure.
+
+    Returns ``(sent_messages, fully_delivered)``. ``fully_delivered`` is True
+    only when EVERY chunk landed (via HTML or plain-text fallback). Callers gate
+    the "delivered" persistence signal on this flag — partial deliveries leave
+    no signal so a webhook retry can re-attempt the full reply, and successful
+    plain-text fallbacks ARE captured so retries don't double-send.
+    """
+    sent_msgs = []
+    fully_delivered = True
+    for i in range(0, len(html_text), MAX_TELEGRAM_MSG_LEN):
+        chunk = html_text[i:i + MAX_TELEGRAM_MSG_LEN]
+        try:
+            sent = await message.reply_text(chunk, parse_mode=ParseMode.HTML)
+            sent_msgs.append(sent)
+        except Exception:
+            try:
+                raw_chunk = plain_text[i:i + MAX_TELEGRAM_MSG_LEN]
+                sent = await message.reply_text(raw_chunk)
+                sent_msgs.append(sent)
+            except Exception as e:
+                logger.error(f"Failed to send chunk {len(sent_msgs) + 1}: {e}")
+                fully_delivered = False
+                break
+        if i + MAX_TELEGRAM_MSG_LEN < len(html_text):
+            await asyncio.sleep(0.5)
+    return sent_msgs, fully_delivered
+
+
 async def _process_links_and_store(
     message, text: str, urls: list[str], message_id: Optional[int]
 ) -> None:
@@ -290,7 +363,17 @@ async def _process_links_and_store(
             if lines and lines[0].startswith("#"):
                 title = lines[0].lstrip("#").strip()
 
-            if message_id:
+            # Send reply chunks first; defer link_summary persistence until the
+            # full reply lands. link_summary existence is the cross-instance
+            # "fully delivered" signal — partial delivery (some chunks sent,
+            # later chunk failed) leaves the user with a truncated reply, so
+            # leave no signal and let a retry redeliver completely.
+            formatted = md_to_telegram_html(agent_result)
+            sent_msgs, fully_delivered = await _send_chunks_with_html_fallback(
+                message, formatted, agent_result
+            )
+
+            if message_id and fully_delivered and sent_msgs:
                 db.store_link_summary(
                     message_id=message_id,
                     url=url,
@@ -299,27 +382,7 @@ async def _process_links_and_store(
                     summary=agent_result,
                 )
 
-            # Convert markdown to Telegram HTML, schedule auto-delete after 1 hour.
-            formatted = md_to_telegram_html(agent_result)
-            sent_msgs = []
-            for i in range(0, len(formatted), MAX_TELEGRAM_MSG_LEN):
-                chunk = formatted[i:i + MAX_TELEGRAM_MSG_LEN]
-                try:
-                    sent = await message.reply_text(chunk, parse_mode=ParseMode.HTML)
-                    sent_msgs.append(sent)
-                except Exception:
-                    # Fallback to plain text if HTML parsing fails
-                    try:
-                        raw_chunk = agent_result[i:i + MAX_TELEGRAM_MSG_LEN]
-                        sent = await message.reply_text(raw_chunk)
-                        sent_msgs.append(sent)
-                    except Exception as e:
-                        logger.error(f"Failed to send chunk: {e}")
-                        break
-                if i + MAX_TELEGRAM_MSG_LEN < len(formatted):
-                    await asyncio.sleep(0.5)
-
-            # Schedule deletion after 1 hour via Supabase (survives container restarts)
+            # Schedule deletion for whatever DID get sent (partial cleanup OK).
             if sent_msgs:
                 from datetime import timedelta
                 delete_after = datetime.now(timezone.utc) + timedelta(hours=24)
@@ -327,6 +390,15 @@ async def _process_links_and_store(
                     db.schedule_message_deletion(sent.chat_id, sent.message_id, delete_after)
         elif isinstance(agent_result, str):
             logger.warning(f"Agent failed for {url[:60]}: {agent_result[:100]}")
+            # Skip TinyFish for YouTube — it returns rendered page chrome
+            # (footer, nav, "About/Press/Copyright") instead of video content.
+            # Better to fail clearly than summarize the YouTube site footer.
+            if link_type == "youtube":
+                await message.reply_text(
+                    "⚠️ Couldn't extract content from this YouTube video "
+                    "(no transcript available)."
+                )
+                return
             # TinyFish fallback — try extracting content directly
             from tools.tinyfish_fetcher import fetch_url_content
             tf_content = await fetch_url_content(url)
@@ -342,18 +414,16 @@ async def _process_links_and_store(
                     if kp:
                         fallback_summary += "## Key Points:\n" + "".join(f"- {p}\n" for p in kp) + "\n"
                     fallback_summary += f"## Summary:\n{cs}"
-                    # Store + reply with fallback summary
-                    if message_id:
-                        db.store_link_summary(message_id=message_id, url=url, link_type=link_type, title=fallback_title, summary=fallback_summary)
+                    # Send reply first; persist link_summary only after the full
+                    # reply lands. Mirrors the primary path: partial delivery →
+                    # no signal, plain-text fallback successes ARE captured so
+                    # they don't trigger a duplicate resend on retry.
                     formatted = md_to_telegram_html(fallback_summary)
-                    sent_msgs = []
-                    for i in range(0, len(formatted), MAX_TELEGRAM_MSG_LEN):
-                        chunk = formatted[i:i + MAX_TELEGRAM_MSG_LEN]
-                        try:
-                            sent = await message.reply_text(chunk, parse_mode=ParseMode.HTML)
-                            sent_msgs.append(sent)
-                        except Exception:
-                            await message.reply_text(fallback_summary[i:i + MAX_TELEGRAM_MSG_LEN])
+                    sent_msgs, fully_delivered = await _send_chunks_with_html_fallback(
+                        message, formatted, fallback_summary
+                    )
+                    if message_id and fully_delivered and sent_msgs:
+                        db.store_link_summary(message_id=message_id, url=url, link_type=link_type, title=fallback_title, summary=fallback_summary)
                     if sent_msgs:
                         from datetime import timedelta
                         delete_after = datetime.now(timezone.utc) + timedelta(hours=24)
