@@ -43,6 +43,11 @@ async def extract_link_summary(url: str, original_text: str) -> Optional[str]:
             agent_result = await run_agent(original_text)
             if isinstance(agent_result, str) and not agent_result.startswith("Error:"):
                 return agent_result
+            # Skip TinyFish for YouTube — it returns rendered page chrome
+            # (footer, nav) instead of video content, producing nonsense summaries.
+            if "youtube.com" in url_lower or "youtu.be" in url_lower:
+                logger.info(f"Agent failed for YouTube URL — not falling back to TinyFish")
+                return None
             # Agent failed — try TinyFish as last resort
             logger.info(f"Agent failed, trying TinyFish fallback for {url[:60]}")
             return await _extract_via_tinyfish(url)

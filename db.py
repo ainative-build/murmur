@@ -72,6 +72,31 @@ def store_message(
         return None
 
 
+def message_exists(tg_chat_id: int, tg_msg_id: int) -> bool:
+    """True if a message with these Telegram IDs is already in DB.
+
+    Used as cross-instance webhook-retry dedup: in-memory `_processing_messages`
+    only catches retries within the same running process, but Cloud Run cold
+    starts and scaling create scenarios where Telegram retries hit a fresh
+    container with an empty set. On DB error, return False so we still process
+    (better to risk a duplicate than silently drop a valid message).
+    """
+    client = get_client()
+    try:
+        result = (
+            client.table("messages")
+            .select("id")
+            .eq("tg_chat_id", tg_chat_id)
+            .eq("tg_msg_id", tg_msg_id)
+            .limit(1)
+            .execute()
+        )
+        return bool(result.data)
+    except Exception as e:
+        logger.warning(f"message_exists check failed: {e}")
+        return False
+
+
 def store_link_summary(
     message_id: int,
     url: str,

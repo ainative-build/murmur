@@ -121,71 +121,81 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     tg_msg_id = message.message_id
     timestamp = message.date or datetime.now(timezone.utc)
 
-    # Dedup: skip if this message is already being processed (webhook retry)
+    # In-memory dedup: skip concurrent retries within this process.
     msg_key = (tg_chat_id, tg_msg_id)
     if msg_key in _processing_messages:
         logger.debug(f"Skipping duplicate webhook for msg {tg_msg_id} in chat {tg_chat_id}")
         return
     _processing_messages.add(msg_key)
 
-    # Get text — could be message.text or message.caption (for photos/docs)
-    text = message.text or message.caption or ""
-    media_type = None
-    source_filename = None
-
-    # Check message content types
-    has_photo = bool(message.photo)
-    has_voice = bool(message.voice or message.audio)
-    has_document = bool(message.document)
-
-    # Voice/audio messages — transcribe with Gemini (stored silently, no reply)
-    if has_voice:
-        transcript = await _transcribe_voice(message, context)
-        if transcript:
-            text = f"[Voice: {transcript}]" + (f"\n{text}" if text else "")
-        media_type = "voice" if message.voice else "audio"
-
-    # Photo — analyze with Gemini vision
-    elif has_photo:
-        description = await _analyze_image(message, context)
-        if description:
-            text = f"[Image: {description}]" + (f"\n{text}" if text else "")
-        media_type = "photo"
-
-    # Document — extract text if supported type
-    elif has_document:
-        file_text, filename = await _extract_document_text(message, context)
-        source_filename = filename
-        if file_text:
-            text = f"[File: {filename}]\n{file_text}" + (f"\n{text}" if text else "")
-            media_type = "file"
-
-    if not text:
-        return  # Nothing to store
-
-    urls = re.findall(URL_REGEX, text)
-    has_links = len(urls) > 0
-
-    message_id = db.store_message(
-        tg_msg_id=tg_msg_id,
-        tg_chat_id=tg_chat_id,
-        tg_user_id=tg_user_id,
-        username=username,
-        text=text,
-        timestamp=timestamp,
-        has_links=has_links,
-        reply_to_tg_msg_id=message.reply_to_message.message_id if message.reply_to_message else None,
-        forwarded_from=message.forward_origin.sender_user.username if (
-            message.forward_origin and hasattr(message.forward_origin, "sender_user") and message.forward_origin.sender_user
-        ) else None,
-        media_type=media_type,
-        source_filename=source_filename,
-    )
-
-    db.upsert_user(tg_user_id, username)
-    db.ensure_user_chat_state(tg_user_id, tg_chat_id)
-
     try:
+        # DB-based dedup: catches webhook retries that arrive at a different
+        # container instance or after a cold start (when in-memory set is empty).
+        if db.message_exists(tg_chat_id, tg_msg_id):
+            logger.info(
+                f"Skipping already-stored msg {tg_msg_id} in chat {tg_chat_id} "
+                "(webhook retry across instance/restart)"
+            )
+            return
+
+        # Get text — could be message.text or message.caption (for photos/docs)
+        text = message.text or message.caption or ""
+        media_type = None
+        source_filename = None
+        file_text = None
+
+        # Check message content types
+        has_photo = bool(message.photo)
+        has_voice = bool(message.voice or message.audio)
+        has_document = bool(message.document)
+
+        # Voice/audio messages — transcribe with Gemini (stored silently, no reply)
+        if has_voice:
+            transcript = await _transcribe_voice(message, context)
+            if transcript:
+                text = f"[Voice: {transcript}]" + (f"\n{text}" if text else "")
+            media_type = "voice" if message.voice else "audio"
+
+        # Photo — analyze with Gemini vision
+        elif has_photo:
+            description = await _analyze_image(message, context)
+            if description:
+                text = f"[Image: {description}]" + (f"\n{text}" if text else "")
+            media_type = "photo"
+
+        # Document — extract text if supported type
+        elif has_document:
+            file_text, filename = await _extract_document_text(message, context)
+            source_filename = filename
+            if file_text:
+                text = f"[File: {filename}]\n{file_text}" + (f"\n{text}" if text else "")
+                media_type = "file"
+
+        if not text:
+            return  # Nothing to store
+
+        urls = re.findall(URL_REGEX, text)
+        has_links = len(urls) > 0
+
+        message_id = db.store_message(
+            tg_msg_id=tg_msg_id,
+            tg_chat_id=tg_chat_id,
+            tg_user_id=tg_user_id,
+            username=username,
+            text=text,
+            timestamp=timestamp,
+            has_links=has_links,
+            reply_to_tg_msg_id=message.reply_to_message.message_id if message.reply_to_message else None,
+            forwarded_from=message.forward_origin.sender_user.username if (
+                message.forward_origin and hasattr(message.forward_origin, "sender_user") and message.forward_origin.sender_user
+            ) else None,
+            media_type=media_type,
+            source_filename=source_filename,
+        )
+
+        db.upsert_user(tg_user_id, username)
+        db.ensure_user_chat_state(tg_user_id, tg_chat_id)
+
         if has_links:
             await _process_links_and_store(message, text, urls, message_id)
 
@@ -327,6 +337,15 @@ async def _process_links_and_store(
                     db.schedule_message_deletion(sent.chat_id, sent.message_id, delete_after)
         elif isinstance(agent_result, str):
             logger.warning(f"Agent failed for {url[:60]}: {agent_result[:100]}")
+            # Skip TinyFish for YouTube — it returns rendered page chrome
+            # (footer, nav, "About/Press/Copyright") instead of video content.
+            # Better to fail clearly than summarize the YouTube site footer.
+            if link_type == "youtube":
+                await message.reply_text(
+                    "⚠️ Couldn't extract content from this YouTube video "
+                    "(no transcript available)."
+                )
+                return
             # TinyFish fallback — try extracting content directly
             from tools.tinyfish_fetcher import fetch_url_content
             tf_content = await fetch_url_content(url)
