@@ -81,29 +81,43 @@ class TestExtractLinkSummary:
                 assert result is None
 
     @pytest.mark.asyncio
-    async def test_extract_link_summary_youtube_skips_tinyfish_on_error(self):
-        """YouTube agent failure should NOT fall back to TinyFish.
-
-        TinyFish returns rendered page chrome (footer/nav) instead of video
-        content for YouTube, producing nonsense summaries. Return None instead.
-        """
+    async def test_extract_link_summary_youtube_gemini_fallback_succeeds(self):
+        """YouTube agent failure → Gemini video understanding returns summary."""
+        mock_provider = AsyncMock()
+        mock_provider.understand_video = AsyncMock(return_value="Great video summary")
         with patch('personal.run_agent', new_callable=AsyncMock, return_value="Error: No transcript"):
-            with patch('tools.tinyfish_fetcher.fetch_url_content', new_callable=AsyncMock) as mock_tf:
+            with patch('src.providers.get_provider', return_value=mock_provider):
                 result = await personal.extract_link_summary(
                     "https://www.youtube.com/watch?v=ABC", "text"
                 )
-                assert result is None
-                # TinyFish must NOT be invoked for YouTube
-                mock_tf.assert_not_called()
+                assert result == "Great video summary"
+                mock_provider.understand_video.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_extract_link_summary_youtube_skips_tinyfish_on_error(self):
+        """YouTube agent + Gemini fallback failure → returns None, never calls TinyFish."""
+        mock_provider = AsyncMock()
+        mock_provider.understand_video = AsyncMock(return_value=None)
+        with patch('personal.run_agent', new_callable=AsyncMock, return_value="Error: No transcript"):
+            with patch('src.providers.get_provider', return_value=mock_provider):
+                with patch('tools.tinyfish_fetcher.fetch_url_content', new_callable=AsyncMock) as mock_tf:
+                    result = await personal.extract_link_summary(
+                        "https://www.youtube.com/watch?v=ABC", "text"
+                    )
+                    assert result is None
+                    mock_tf.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_extract_link_summary_youtube_short_url_skips_tinyfish(self):
         """youtu.be short URLs also skip TinyFish fallback."""
+        mock_provider = AsyncMock()
+        mock_provider.understand_video = AsyncMock(return_value=None)
         with patch('personal.run_agent', new_callable=AsyncMock, return_value="Error: failed"):
-            with patch('tools.tinyfish_fetcher.fetch_url_content', new_callable=AsyncMock) as mock_tf:
-                result = await personal.extract_link_summary("https://youtu.be/ABC123", "text")
-                assert result is None
-                mock_tf.assert_not_called()
+            with patch('src.providers.get_provider', return_value=mock_provider):
+                with patch('tools.tinyfish_fetcher.fetch_url_content', new_callable=AsyncMock) as mock_tf:
+                    result = await personal.extract_link_summary("https://youtu.be/ABC123", "text")
+                    assert result is None
+                    mock_tf.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_extract_link_summary_exception(self):
