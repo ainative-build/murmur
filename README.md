@@ -30,7 +30,8 @@ Silent listener that captures team discussions, summarizes shared links, and pro
 | Bot framework | python-telegram-bot v21+ |
 | Web server | FastAPI + Uvicorn |
 | Link pipeline | LangGraph + BAML (routing + summarization) |
-| LLM | Gemini 3 via `google-genai` SDK (Vertex AI in production) |
+| LLM | Gemini 3 + MiniMax M2.7 (configurable per modality) |
+| AI Provider Abstraction | src/providers/ (env-driven switching, no rebuild) |
 | Database | Supabase (Postgres) |
 | Content extraction | TinyFish (Grok, X Articles, GitHub), Tavily (web), twitterapi.io (X), youtube-transcript-api (YouTube), Playwright+AgentQL (LinkedIn), PyMuPDF (PDF), python-docx (DOCX) |
 | Voice/audio | Gemini 3 Flash audio transcription (OGG Opus from Telegram) |
@@ -61,8 +62,19 @@ TELEGRAM_BOT_TOKEN=your_bot_token
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_supabase_anon_key
 
-# Gemini (for BAML link pipeline + future features)
+# AI Provider (default: Gemini)
 GEMINI_API_KEY=your_gemini_api_key
+
+# Optional: MiniMax provider for text/image/file/voice modalities
+# MINIMAX_API_KEY=your_minimax_api_key
+# MINIMAX_BASE_URL=https://api.minimax.io/v1  # default
+
+# Per-modality provider selection (if not set, falls back to AI_PROVIDER)
+# AI_PROVIDER=gemini  # global default
+# AI_PROVIDER_TEXT=minimax  # override for text generation
+# AI_PROVIDER_IMAGE=minimax  # override for image analysis
+# AI_PROVIDER_FILE=gemini  # override for file summarization
+# AI_PROVIDER_VOICE=minimax  # override for voice transcription
 
 # Content extraction tools
 TAVILY_API_KEY=your_tavily_key
@@ -85,6 +97,24 @@ DEEPSEEK_API_KEY=your_deepseek_key
 # Polling mode (local dev)
 USE_POLLING=true
 ```
+
+#### Switching Providers (Cloud Run)
+
+No code rebuild required. Update env vars via gcloud:
+
+```bash
+# Switch text generation to MiniMax
+gcloud run services update murmur --update-env-vars AI_PROVIDER_TEXT=minimax
+
+# Switch back to Gemini
+gcloud run services update murmur --update-env-vars AI_PROVIDER_TEXT=gemini
+
+# Switch all modalities at once
+gcloud run services update murmur --update-env-vars \
+  AI_PROVIDER_TEXT=minimax,AI_PROVIDER_IMAGE=minimax,AI_PROVIDER_VOICE=minimax
+```
+
+Default: `AI_PROVIDER=gemini` — no behavior change until env vars are explicitly flipped.
 
 ### 3. Set up Supabase
 

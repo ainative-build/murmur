@@ -477,6 +477,25 @@ CREATE TABLE user_chat_state (
 
 ---
 
+## AI Provider Integration
+
+**Rule:** All LLM calls go through `src/providers/`. No direct `google.genai` or MiniMax imports outside `src/providers/`.
+
+```python
+# Correct: via provider abstraction
+from src.providers import Feature, get_provider
+provider = get_provider(Feature.TEXT)
+result = await provider.text_to_text(system_prompt=..., user_input=...)
+
+# Wrong: violates abstraction
+import google.genai
+genai.configure(...)  # Forbid in app code
+```
+
+**Exception:** BAML clients hardcode Gemini (acceptable; tracked for future migration).
+
+---
+
 ## BAML Code Conventions
 
 ### File Organization
@@ -531,29 +550,15 @@ test_agent_integration.py
 ```
 
 ### Test Structure
+Use pytest with AsyncMock for async handlers. Arrange-Act-Assert pattern.
 ```python
-import pytest
-from unittest.mock import patch, AsyncMock
-
-def test_normalize_url_strips_utm_params():
-    """Test that normalize_url removes UTM tracking params."""
-    url = "https://example.com/path?utm_source=twitter&id=123"
-    result = normalize_url(url)
-    assert result == "https://example.com/path?id=123"
-
 @pytest.mark.asyncio
 async def test_group_message_handler_stores_message():
-    """Test that group_message_handler stores message in Supabase."""
-    # Arrange
+    """Test message storage."""
     mock_update = AsyncMock()
-    mock_message = AsyncMock()
-    mock_update.effective_message = mock_message
-    
-    # Act
+    mock_update.effective_message = AsyncMock()
     await group_message_handler(mock_update, AsyncMock())
-    
-    # Assert
-    # Verify db.store_message was called
+    # Verify db.store_message called
 ```
 
 ---
@@ -779,23 +784,7 @@ playwright install
 
 ## Deployment Checklist
 
-Before committing to main:
-- [ ] All functions have type hints
-- [ ] All functions have docstrings
-- [ ] No secrets in code (env vars only)
-- [ ] Error handling with logging
-- [ ] Tests pass (when available)
-- [ ] Code follows naming conventions
-- [ ] No unused imports
-- [ ] No magic numbers (use constants)
+**Before Commit:** Type hints + docstrings ✓ | No secrets in code ✓ | Logging errors ✓ | Tests pass ✓ | Conventions ✓ | No unused imports ✓
 
-Before deploying to production:
-- [ ] `.env` file is NOT committed
-- [ ] All environment variables are documented
-- [ ] Supabase migration has been applied
-- [ ] Database indexes are created
-- [ ] Webhook secret token is set to strong random value
-- [ ] Telegram API token is correct for production bot
-- [ ] Cloud Run service account has required permissions
-- [ ] Monitoring and logging are configured
+**Before Deploy:** `.env` NOT committed ✓ | Env vars documented ✓ | DB migration applied ✓ | Webhook secret strong ✓ | Prod token correct ✓ | Cloud Run perms OK ✓ | Monitoring configured ✓
 

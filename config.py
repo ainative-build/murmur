@@ -26,6 +26,10 @@ NOTEBOOKLM_NOTEBOOK_ID: str = os.getenv("NOTEBOOKLM_NOTEBOOK_ID", "")
 GDRIVE_FOLDER_ID: str = os.getenv("GDRIVE_FOLDER_ID", "")
 GOOGLE_CREDENTIALS_PATH: str = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
 
+# --- MiniMax ---
+MINIMAX_API_KEY: str = os.getenv("MINIMAX_API_KEY", "")
+MINIMAX_BASE_URL: str = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io/v1")
+
 # --- TinyFish ---
 TINYFISH_API_KEY: str = os.getenv("TINYFISH_API_KEY", "")
 

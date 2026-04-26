@@ -197,7 +197,97 @@ url_norm = normalize_url("https://example.com:443/path?utm_source=twitter")
 
 ---
 
-### agent.py — LangGraph Orchestration
+### AI Provider Layer
+
+**Modules:** `src/providers/` + `src/ai/prompts/`  
+**Role:** Abstraction for multi-provider LLM access (Gemini + MiniMax)  
+
+#### Provider Architecture
+```
+Feature-based request (Feature.TEXT, Feature.IMAGE, etc.)
+  ↓
+get_provider(Feature) → factory checks env-var precedence
+  ↓
+AI_PROVIDER_<FEATURE> > AI_PROVIDER > default (gemini)
+  ↓
+Provider instance (GeminiProvider or MiniMaxProvider)
+  ├─ Retry + fallback logic
+  ├─ Structured logging (provider_usage JSON)
+  └─ SDK-specific client (google.genai, minimax.api)
+  ↓
+Method call (e.g., .text_to_speech(), .generate_text())
+  ↓
+Result or exception (caller handles gracefully)
+```
+
+#### Modality Routing Table
+
+| Feature | Default Provider | Env Var | Notes |
+|---------|------------------|---------|-------|
+| TEXT | Gemini (env: AI_PROVIDER_TEXT) | `AI_PROVIDER_TEXT` | catchup, topics, draft, decide, reminder |
+| IMAGE | Gemini (env: AI_PROVIDER_IMAGE) | `AI_PROVIDER_IMAGE` | bot._analyze_image; MiniMax v1 unsupported |
+| FILE | Gemini (env: AI_PROVIDER_FILE) | `AI_PROVIDER_FILE` | PDF/DOCX summarization (BAML-pinned for now) |
+| VOICE | Gemini (env: AI_PROVIDER_VOICE) | `AI_PROVIDER_VOICE` | voice_transcriber.py; MiniMax: /v1/stt/create |
+| VIDEO | Gemini (PINNED) | N/A | YouTube/video — MiniMax has no video input |
+| ROUTING | Gemini (PINNED) | N/A | BAML RouteRequest — Gemini-only this release |
+
+#### Environment Precedence
+```python
+# Pseudo-code for env resolution
+def get_provider(feature: Feature) -> Provider:
+    specific = os.getenv(f"AI_PROVIDER_{feature.name}")  # Highest priority
+    if specific:
+        return provider_map[specific]
+    general = os.getenv("AI_PROVIDER", "gemini")  # Middle priority
+    if general:
+        return provider_map[general]
+    return GeminiProvider()  # Default fallback
+```
+
+**Result:** No code rebuild needed to flip providers — env-only operation.
+
+#### Modules
+
+**`src/providers/base.py`** — Abstract Provider interface
+- Methods: `text_to_text()`, `text_to_image()`, `file_to_text()`, `audio_to_text()`
+- Retry + fallback hooks for subclasses
+- Structured logging: `{"event": "provider_usage", "provider": "...", "feature": "...", "input_tokens": N, "output_tokens": M}`
+
+**`src/providers/gemini.py`** — Google Gemini 3 Flash/Pro implementation
+- Models: gemini-3-flash (default), gemini-3.1-pro (advanced)
+- Audio: OGG Opus transcription via Gemini audio API
+- Image: vision.GenerateContent() API
+- File: document upload via Gemini Files API
+
+**`src/providers/minimax.py`** — MiniMax M2.7 implementation
+- Models: abab6.5-chat (text), abab6.5-vision (vision)
+- Audio: polling-based STT via /v1/stt/create (fixed 2s interval, 30s ceiling)
+- Image: multimodal vision model
+- File: text extraction before submitting (no native file API)
+
+**`src/providers/config.py`** — Provider-specific config (API keys, base URLs)
+
+**`src/providers/factory.py`** — `get_provider(Feature) -> Provider` factory function
+
+**`src/providers/types.py`** — Shared types (Feature enum, TextGenerationConfig, etc.)
+
+**`src/providers/retry.py`** — Retry decorator + fallback strategy (transient errors only)
+
+#### Prompt Modules (`src/ai/prompts/`)
+
+Extracted from monolithic `summarizer.py` for composability:
+- `catchup.py` — Build catchup system+user prompts
+- `topics.py` — Build topics clustering prompt
+- `topic_detail.py` — Build topic deep-dive prompt
+- `decide.py` — Build structured decision prompt
+- `draft.py` — Build brainstorm prompt
+- `reminder.py` — Build reminder digest prompt
+
+**Note:** BAML routing (`RouteRequest`) and file summarization remain Gemini-pinned in this release. Migration tracked in a separate future plan.
+
+---
+
+### agent.py — LangGraph Orchestration (Link Summarization)
 
 **File:** `/agent.py` (846 lines)  
 **Role:** Multi-step reasoning pipeline for link summarization  
@@ -206,7 +296,7 @@ url_norm = normalize_url("https://example.com:443/path?utm_source=twitter")
 ```
 Input: Raw message text with URL(s)
   ↓
-1. Route Request (BAML + Gemini 3 Flash)
+1. Route Request (BAML + Gemini 3 Flash) — NOT yet migrated to provider layer
    ├─ Webpage → TavilyAPI
    ├─ PDF → PyMuPDF
    ├─ Twitter → twitterapi.io
@@ -218,13 +308,15 @@ Input: Raw message text with URL(s)
    ├─ Tool-specific extraction (title, full text, metadata)
    └─ Return structured content
   ↓
-3. Summarize (BAML + Gemini 3 Pro)
+3. Summarize (BAML + Gemini 3 Pro) — NOT yet migrated to provider layer
    ├─ Input: extracted content
    ├─ Output: concise markdown summary
    └─ Format: # Title\n\nSummary text
   ↓
 Output: Summary markdown
 ```
+
+**Status:** BAML integration is Gemini-pinned in Phase 7. Future plan: migrate to provider abstraction, allowing MiniMax text routing/summarization.
 
 #### Content Extractors (5 Tools)
 
@@ -473,6 +565,8 @@ CREATE TABLE exports (
 ## Configuration & Deployment
 
 ### Environment Variables
+
+#### Core Infrastructure
 | Variable | Example | Required | Used By |
 |----------|---------|----------|---------|
 | `TELEGRAM_BOT_TOKEN` | `123:ABC...` | Yes | bot.py |
@@ -482,9 +576,24 @@ CREATE TABLE exports (
 | `USE_POLLING` | `true` or `false` | No (default: false) | bot.py |
 | `SUPABASE_URL` | `https://*.supabase.co` | Yes | db.py |
 | `SUPABASE_KEY` | `eyJhb...` | Yes | db.py |
-| `GEMINI_API_KEY` | `AIzaSy...` | Yes | BAML clients |
 | `HOST` | `0.0.0.0` | No (default) | uvicorn |
 | `PORT` | `8080` | No (default) | uvicorn |
+
+#### AI Provider Selection
+| Variable | Default | Options | Used By | Notes |
+|----------|---------|---------|---------|-------|
+| `AI_PROVIDER` | `gemini` | `gemini` \| `minimax` | src/providers/factory.py | Global default; overridden by per-feature vars |
+| `AI_PROVIDER_TEXT` | `{AI_PROVIDER}` | `gemini` \| `minimax` | summarizer.py, commands.py | Text generation (catchup, topics, decide, etc.) |
+| `AI_PROVIDER_IMAGE` | `{AI_PROVIDER}` | `gemini` \| `minimax` | bot._analyze_image | Image analysis |
+| `AI_PROVIDER_FILE` | `{AI_PROVIDER}` | `gemini` \| `minimax` | agent.py (BAML) | File summarization (currently Gemini-pinned) |
+| `AI_PROVIDER_VOICE` | `{AI_PROVIDER}` | `gemini` \| `minimax` | voice_transcriber.py | Voice transcription |
+
+#### LLM API Keys
+| Variable | Required | Provider | Used By |
+|----------|----------|----------|---------|
+| `GEMINI_API_KEY` | Yes | Google Gemini | src/providers/gemini.py, BAML clients |
+| `MINIMAX_API_KEY` | If any `AI_PROVIDER_*` = minimax | MiniMax | src/providers/minimax.py |
+| `MINIMAX_BASE_URL` | No (default: https://api.minimax.io/v1) | MiniMax | src/providers/minimax.py |
 
 ### Deployment Modes
 

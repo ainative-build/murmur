@@ -12,6 +12,13 @@ SECRETS=(
   "TELEGRAM_BOT_TOKEN"
   "TELEGRAM_WEBHOOK_SECRET_TOKEN"
   "WEBHOOK_SECRET_PATH"
+  "SUPABASE_URL"
+  "SUPABASE_KEY"
+  "TINYFISH_API_KEY"
+  # NOTE: To create the MINIMAX_API_KEY secret manually in GCP Secret Manager:
+  #   gcloud secrets create MINIMAX_API_KEY --replication-policy=automatic --project=<PROJECT_ID>
+  #   printf "<your-key>" | gcloud secrets versions add MINIMAX_API_KEY --data-file=- --project=<PROJECT_ID>
+  "MINIMAX_API_KEY"
 )
 
 # --- You shouldn't need to edit below this line --- 

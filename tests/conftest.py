@@ -98,6 +98,15 @@ def reset_db_client():
     db._client = None
 
 
+@pytest.fixture(autouse=True)
+def reset_provider_factory():
+    """Reset provider factory singleton before each test to ensure clean state."""
+    from src.providers.factory import _reset_for_tests
+    _reset_for_tests()
+    yield
+    _reset_for_tests()
+
+
 @pytest.fixture
 def sample_urls():
     """Sample URLs for testing URL normalization."""

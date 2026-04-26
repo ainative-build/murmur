@@ -9,6 +9,53 @@
 
 ## File Tree & Responsibilities
 
+### AI Provider Layer (NEW — Phase 7)
+
+#### src/providers/ (Multi-provider abstraction)
+
+**Module:** `/src/providers/` (12 files, ~800 LOC)  
+**Role:** Environment-driven provider selection for Gemini 3 + MiniMax M2.7
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `__init__.py` | — | Exports Feature enum, get_provider() factory |
+| `base.py` | ~50 | Abstract Provider interface (text_to_text, text_to_image, etc.) |
+| `types.py` | ~40 | Feature enum, TextGenerationConfig, shared types |
+| `config.py` | ~60 | Provider-specific config (API keys, base URLs, retry defaults) |
+| `factory.py` | ~30 | `get_provider(Feature) -> Provider` with env precedence logic |
+| `retry.py` | ~40 | Retry decorator + fallback strategy for transient errors |
+| `gemini.py` | ~200 | GeminiProvider implementation (Gemini 3 Flash/Pro) |
+| `gemini_client.py` | ~30 | Lazy-loaded Gemini SDK client |
+| `gemini_helpers.py` | ~90 | Gemini-specific formatting, token count estimation |
+| `minimax.py` | ~200 | MiniMaxProvider implementation (M2.7) |
+| `minimax_client.py` | ~40 | MiniMax SDK client wrapper |
+| `minimax_stt.py` | ~60 | MiniMax STT polling logic (fixed 2s interval, 30s ceiling) |
+
+**Key Design:** Provider abstraction fully transparent to callers. Env-only switching (no code rebuild).
+
+**Telemetry:** All providers log structured JSON `{"event": "provider_usage", "provider": "...", "feature": "...", "input_tokens": N, "output_tokens": M}` for cost tracking.
+
+---
+
+#### src/ai/prompts/ (Extracted prompt templates)
+
+**Module:** `/src/ai/prompts/` (7 files, ~100 LOC)  
+**Role:** Composable prompt builders for text generation
+
+| File | Purpose |
+|------|---------|
+| `__init__.py` | Package marker |
+| `catchup.py` | Build catchup system+user prompts |
+| `topics.py` | Build topics clustering prompt |
+| `topic_detail.py` | Build topic deep-dive prompt |
+| `decide.py` | Build structured decision prompt |
+| `draft.py` | Build brainstorm prompt |
+| `reminder.py` | Build reminder digest prompt |
+
+**Design:** Extracted from monolithic summarizer.py (401 → 175 LOC). Each module builds a (system_prompt, user_prompt) tuple, called by corresponding summarizer.generate_* function.
+
+---
+
 ### Core Application Files (Root)
 
 #### bot.py (291 lines)
@@ -121,6 +168,16 @@ Output: https://example.com/path?id=123
 
 **Dependencies:** urllib.parse  
 **Error Handling:** Fallback to lowercased URL if parsing fails
+
+---
+
+#### summarizer.py (175 lines)
+**Purpose:** Thin orchestration layer — delegates to AI provider  
+**Key Exports:** `generate_catchup()`, `generate_topics()`, `generate_topic_detail()`, `generate_decision_view()`, `generate_draft_response()`, `generate_reminder_digest()`, `get_genai_client()` (backward compat), `config`
+
+**Design:** All direct Gemini calls removed. Functions now use `get_provider(Feature.TEXT)` internally. Public API unchanged — existing callers (commands.py, agent.py, tests) require no modifications.
+
+**Dependencies:** src/providers, src/ai/prompts, config (for backward compat)
 
 ---
 
@@ -353,10 +410,13 @@ client<llm> LLMFallback {
 - **rich >=14.0.0** — Rich terminal output
 - **loguru >=0.7.3** — Advanced logging
 
+### AI Provider SDKs
+- **google-genai >=0.1.0** — Google Gemini 3 direct SDK (Phase 7: via src/providers)
+- **minimax-api >=0.2.0** — MiniMax M2.7 client (Phase 7: via src/providers)
+
 ### Development
 - **marimo >=0.13.2** — Interactive notebooks
 - **langgraph-cli[inmem] >=0.2.7** — CLI tools
-- **google-genai >=0.1.0** — Google Gemini direct SDK (future use)
 
 ---
 
