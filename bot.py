@@ -443,43 +443,29 @@ async def _process_links_and_store(
 
 
 async def _analyze_image(message, context: ContextTypes.DEFAULT_TYPE) -> str | None:
-    """Download a photo from Telegram and analyze it with Gemini 3 vision.
+    """Download a photo from Telegram and analyze it via the image provider.
 
     Returns a brief text description or None on failure.
     """
     try:
-        from google.genai import types as genai_types
-        from summarizer import get_genai_client, MODEL_FLASH
+        from src.providers import Feature, get_provider
+        from src.providers.types import ImagePart, TextGenerationConfig
 
-        # Get the largest photo size
         photo = message.photo[-1]  # last = highest resolution
         file = await context.bot.get_file(photo.file_id)
+        photo_bytes = bytes(await file.download_as_bytearray())
 
-        # Download to bytes
-        photo_bytes = await file.download_as_bytearray()
-
-        client = get_genai_client()
         caption = message.caption or ""
         prompt = f"Describe this image concisely in 1-2 sentences for a team discussion log.{f' Context: {caption}' if caption else ''}"
 
-        response = await client.aio.models.generate_content(
-            model=MODEL_FLASH,
-            contents=[
-                genai_types.Content(
-                    role="user",
-                    parts=[
-                        genai_types.Part(text=prompt),
-                        genai_types.Part.from_bytes(data=bytes(photo_bytes), mime_type="image/jpeg"),
-                    ],
-                )
-            ],
-            config=genai_types.GenerateContentConfig(max_output_tokens=256),
+        result = await get_provider(Feature.IMAGE).generate_with_image(
+            ImagePart(data=photo_bytes, mime_type="image/jpeg"),
+            prompt,
+            TextGenerationConfig(max_output_tokens=256),
         )
-        description = response.text
-        if description:
-            logger.info(f"Image analyzed: {description[:80]}")
-            return description.strip()
-        return None
+        if result:
+            logger.info(f"Image analyzed: {result[:80]}")
+        return result.strip() if result else None
     except Exception as e:
         logger.error(f"Image analysis failed: {e}")
         return None

@@ -1,38 +1,26 @@
-"""Voice/audio transcription via Gemini 3 Flash.
+"""Voice/audio transcription — delegates to AI provider.
 
-Transcribes audio bytes (OGG Opus from Telegram, MP3, WAV, etc.) using the
-google-genai SDK. Same pattern as _analyze_image() in bot.py.
-
-Telegram voice messages are OGG with Opus codec. Gemini docs list OGG Vorbis
-as supported — OGG Opus works empirically but add WAV fallback if it breaks.
+Public signature is unchanged: transcribe_audio(audio_bytes, mime_type, max_output_tokens).
+Internally routes through get_provider(Feature.VOICE) so the active provider
+(Gemini or MiniMax) handles the actual SDK call.
 """
 
 import logging
 
-from google.genai import types as genai_types
-
-from summarizer import get_genai_client, MODEL_FLASH
-
 logger = logging.getLogger(__name__)
-
-TRANSCRIPTION_PROMPT = (
-    "Transcribe this audio accurately. Return only the transcription text, "
-    "no commentary, timestamps, or formatting. If the audio is not speech "
-    "or is unintelligible, return 'Unable to transcribe'."
-)
 
 
 async def transcribe_audio(
     audio_bytes: bytes,
     mime_type: str = "audio/ogg",
-    max_output_tokens: int = 4096,
+    max_output_tokens: int = 4096,  # noqa: ARG001 — kept for signature compat; provider uses its own default
 ) -> str | None:
-    """Transcribe audio bytes using Gemini 3 Flash.
+    """Transcribe audio bytes using the configured voice provider.
 
     Args:
         audio_bytes: Raw audio data (OGG Opus, MP3, WAV, etc.)
         mime_type: MIME type of the audio. Telegram voice = "audio/ogg".
-        max_output_tokens: Max tokens for transcription output.
+        max_output_tokens: Accepted for API compat; provider uses its own limit.
 
     Returns:
         Transcription text, or None on failure.
@@ -40,30 +28,9 @@ async def transcribe_audio(
     if not audio_bytes:
         return None
 
+    from src.providers import Feature, get_provider
     try:
-        client = get_genai_client()
-        response = await client.aio.models.generate_content(
-            model=MODEL_FLASH,
-            contents=[
-                genai_types.Content(
-                    role="user",
-                    parts=[
-                        genai_types.Part.from_bytes(
-                            data=audio_bytes, mime_type=mime_type
-                        ),
-                        genai_types.Part(text=TRANSCRIPTION_PROMPT),
-                    ],
-                )
-            ],
-            config=genai_types.GenerateContentConfig(
-                max_output_tokens=max_output_tokens,
-            ),
-        )
-        transcript = response.text
-        if transcript and transcript.strip():
-            logger.info(f"Audio transcribed: {len(transcript)} chars")
-            return transcript.strip()
-        return None
+        return await get_provider(Feature.VOICE).transcribe_audio(audio_bytes, mime_type)
     except Exception as e:
-        logger.error(f"Audio transcription failed: {e}")
+        logger.error("Audio transcription failed: %s", e)
         return None

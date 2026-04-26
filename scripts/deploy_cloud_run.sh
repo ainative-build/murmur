@@ -25,6 +25,7 @@ SECRETS_TO_MAP=(
   "SUPABASE_URL=SUPABASE_URL:latest"
   "SUPABASE_KEY=SUPABASE_KEY:latest"
   "TINYFISH_API_KEY=TINYFISH_API_KEY:latest"
+  "MINIMAX_API_KEY=MINIMAX_API_KEY:latest"
 )
 
 # --- Script Logic --- 
@@ -134,6 +135,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --memory=1024Mi \
   --min-instances=1 \
   --cpu-throttling \
+  --set-env-vars="AI_PROVIDER=gemini,AI_PROVIDER_TEXT=gemini,AI_PROVIDER_IMAGE=gemini,AI_PROVIDER_FILE=gemini,AI_PROVIDER_VOICE=gemini,AI_PROVIDER_VIDEO=gemini,AI_PROVIDER_ROUTING=gemini,MINIMAX_BASE_URL=https://api.minimax.io/v1,MINIMAX_MODEL=MiniMax-Text-01" \
   $SECRETS_ARG \
   --project="$PROJECT_ID"
 

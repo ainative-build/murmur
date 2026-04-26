@@ -71,6 +71,13 @@ class LLMMockConfig:
     def set_route(self, route: ExtractorTool) -> None:
         self.route = route
 
+    def set_provider(self, feature_name: str, provider_name: str) -> None:
+        """Set provider for a specific feature, clearing factory cache."""
+        import os
+        from src.providers.factory import _reset_for_tests
+        _reset_for_tests()
+        os.environ[f"AI_PROVIDER_{feature_name.upper()}"] = provider_name
+
 
 def install_llm_mocks(config: LLMMockConfig) -> list:
     """Install the patches and return the list of patcher objects.
