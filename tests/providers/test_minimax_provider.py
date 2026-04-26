@@ -251,13 +251,10 @@ class TestMiniMaxProviderFiles:
 class TestMiniMaxProviderAudio:
     """Test audio transcription."""
 
-    async def test_transcribe_audio_delegates_to_stt(self, minimax_provider):
-        """transcribe_audio delegates to minimax_stt.transcribe_via_stt."""
-        with patch("src.providers.minimax_stt.transcribe_via_stt", new_callable=AsyncMock) as mock_stt:
-            mock_stt.return_value = "Hello world"
-            result = await minimax_provider.transcribe_audio(b"audio_bytes", "audio/ogg")
-            assert result == "Hello world"
-            mock_stt.assert_called_once_with(b"audio_bytes", "audio/ogg")
+    async def test_transcribe_audio_raises_not_supported(self, minimax_provider):
+        """transcribe_audio raises NotSupportedError — MiniMax has no STT API."""
+        with pytest.raises(NotSupportedError, match="speech-to-text"):
+            await minimax_provider.transcribe_audio(b"audio_bytes", "audio/ogg")
 
 
 class TestMiniMaxProviderVideo:

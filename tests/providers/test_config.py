@@ -7,7 +7,6 @@ from src.providers.config import (
     resolve_provider_name,
     get_gemini_models,
     get_minimax_model,
-    get_minimax_stt_model,
     get_minimax_base_url,
     GEMINI,
     MINIMAX,
@@ -90,22 +89,12 @@ class TestModelConfig:
     def test_minimax_model_default(self, monkeypatch):
         """get_minimax_model returns default when env not set."""
         monkeypatch.delenv("MINIMAX_MODEL", raising=False)
-        assert get_minimax_model() == "minimax-m2.7"
+        assert get_minimax_model() == "MiniMax-Text-01"
 
     def test_minimax_model_from_env(self, monkeypatch):
         """get_minimax_model respects env override."""
         monkeypatch.setenv("MINIMAX_MODEL", "minimax-m4")
         assert get_minimax_model() == "minimax-m4"
-
-    def test_minimax_stt_model_default(self, monkeypatch):
-        """get_minimax_stt_model returns default when env not set."""
-        monkeypatch.delenv("MINIMAX_STT_MODEL", raising=False)
-        assert get_minimax_stt_model() == "#g1_whisper-large"
-
-    def test_minimax_stt_model_from_env(self, monkeypatch):
-        """get_minimax_stt_model respects env override."""
-        monkeypatch.setenv("MINIMAX_STT_MODEL", "#g1_whisper-custom")
-        assert get_minimax_stt_model() == "#g1_whisper-custom"
 
     def test_minimax_base_url_default(self, monkeypatch):
         """get_minimax_base_url returns default when env not set."""

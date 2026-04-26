@@ -1,8 +1,8 @@
 """MiniMax concrete Provider implementation.
 
 Text, image, and file generation use the OpenAI-compatible chat completions API.
-Audio transcription delegates to minimax_stt (submit-then-poll pattern).
-Video understanding is not supported — raises NotSupportedError.
+Audio transcription and video understanding are not supported — raise NotSupportedError.
+Set AI_PROVIDER_VOICE=gemini (default) and AI_PROVIDER_VIDEO=gemini to route those features.
 """
 from __future__ import annotations
 
@@ -131,8 +131,10 @@ class MiniMaxProvider(Provider):
         return result
 
     async def transcribe_audio(self, audio_bytes: bytes, mime: str = "audio/ogg") -> str | None:
-        from .minimax_stt import transcribe_via_stt
-        return await transcribe_via_stt(audio_bytes, mime)
+        raise NotSupportedError(
+            "MiniMax does not offer a speech-to-text API. "
+            "Set AI_PROVIDER_VOICE=gemini (the default) to route audio transcription."
+        )
 
     async def understand_video(self, video: bytes | str, prompt: str) -> str:
         raise NotSupportedError(
