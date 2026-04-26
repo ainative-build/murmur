@@ -295,19 +295,21 @@ class _PsycopgSupabaseClient:
 _active_patches: list = []
 
 
+_shim_client: "_PsycopgSupabaseClient | None" = None
+
+
 def install_psycopg_shim(dsn: str) -> None:
     """Install the shim. Idempotent — calling twice replaces the active one."""
+    global _shim_client
     uninstall_psycopg_shim()
 
-    client = _PsycopgSupabaseClient(dsn)
-    p1 = patch("db._client", client)
+    _shim_client = _PsycopgSupabaseClient(dsn)
+    # Patch db._client so get_client() returns our shim without calling create_client().
+    # Do NOT patch db.get_client itself — that breaks unit tests in test_db.py that
+    # mock create_client and expect get_client() to call it.
+    p1 = patch("db._client", _shim_client)
     p1.start()
     _active_patches.append(p1)
-
-    # Some db.py paths call get_client() directly — make it return our shim.
-    p2 = patch("db.get_client", return_value=client)
-    p2.start()
-    _active_patches.append(p2)
 
 
 def uninstall_psycopg_shim() -> None:

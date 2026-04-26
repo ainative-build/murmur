@@ -92,6 +92,24 @@ def _configure_test_environment(test_db_dsn: str):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _restore_shim_client():
+    """Re-apply db._client = shim after root conftest's reset_db_client clears it.
+
+    Root conftest sets db._client = None before/after every test. For integration
+    tests db._client must be the shim so get_client() doesn't call real Supabase.
+    Subdirectory conftest autouse fixtures run after root conftest ones, so this
+    restoration happens after the reset.
+    """
+    import db
+    from tests.integration.supabase_shim import _shim_client
+    if _shim_client is not None:
+        db._client = _shim_client
+    yield
+    if _shim_client is not None:
+        db._client = _shim_client
+
+
 # --------------------------------------------------------------------------
 # Function-scoped: clean DB between tests
 # --------------------------------------------------------------------------
