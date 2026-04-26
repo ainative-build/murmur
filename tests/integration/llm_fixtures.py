@@ -14,7 +14,7 @@ The default responses (when not overridden per-test) are listed in `DEFAULTS`.
 
 from dataclasses import dataclass, field
 from typing import Optional
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from baml_client.types import ContentType, ExtractorTool, Summary
 
@@ -87,43 +87,49 @@ def install_llm_mocks(config: LLMMockConfig) -> list:
     p_route = patch("baml_client.b.RouteRequest", side_effect=lambda **kwargs: config.route)
     patches.append(p_route)
 
-    # ---- Gemini direct calls in summarizer.py ----
-    async def _async_return(value):
-        return value
-
+    # ---- Gemini direct calls in summarizer.py (async — use AsyncMock) ----
+    # AsyncMock's side_effect can be a sync function; the Mock auto-wraps the
+    # return into an awaitable. We read from `config` lazily so per-test
+    # assignments to mock_llms.<field> are honoured.
     p_catchup = patch(
         "summarizer.generate_catchup",
-        side_effect=lambda *a, **kw: _async_return(config.catchup),
+        new_callable=AsyncMock,
+        side_effect=lambda *a, **kw: config.catchup,
     )
     patches.append(p_catchup)
 
     p_topics = patch(
         "summarizer.generate_topics",
-        side_effect=lambda *a, **kw: _async_return(config.topics),
+        new_callable=AsyncMock,
+        side_effect=lambda *a, **kw: config.topics,
     )
     patches.append(p_topics)
 
     p_topic = patch(
         "summarizer.generate_topic_detail",
-        side_effect=lambda *a, **kw: _async_return(config.topic_detail),
+        new_callable=AsyncMock,
+        side_effect=lambda *a, **kw: config.topic_detail,
     )
     patches.append(p_topic)
 
     p_decide = patch(
         "summarizer.generate_decision_view",
-        side_effect=lambda *a, **kw: _async_return(config.decision_view),
+        new_callable=AsyncMock,
+        side_effect=lambda *a, **kw: config.decision_view,
     )
     patches.append(p_decide)
 
     p_draft = patch(
         "summarizer.generate_draft_response",
-        side_effect=lambda *a, **kw: _async_return(config.draft),
+        new_callable=AsyncMock,
+        side_effect=lambda *a, **kw: config.draft,
     )
     patches.append(p_draft)
 
     p_reminder = patch(
         "summarizer.generate_reminder_digest",
-        side_effect=lambda *a, **kw: _async_return(config.reminder),
+        new_callable=AsyncMock,
+        side_effect=lambda *a, **kw: config.reminder,
     )
     patches.append(p_reminder)
 

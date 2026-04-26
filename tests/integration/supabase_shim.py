@@ -15,6 +15,8 @@ smoke test bypasses it via `request.applymarker("no_db_shim")` if needed.
 """
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Optional
 from unittest.mock import patch
 
@@ -22,11 +24,25 @@ import psycopg
 from psycopg import sql
 
 
+def _serialise_value(v: Any) -> Any:
+    """Convert psycopg-native types to JSON-friendly forms supabase-py would return."""
+    if isinstance(v, (datetime, date)):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
+
+
+def _serialise_row(row: dict) -> dict:
+    return {k: _serialise_value(v) for k, v in row.items()}
+
+
 @dataclass
 class _APIResponse:
-    """Mimics `supabase.PostgrestResponse` — code only reads `.data`."""
+    """Mimics `supabase.PostgrestResponse` — code reads `.data` and sometimes `.count`."""
 
     data: Optional[list] = None
+    count: Optional[int] = None
 
 
 class _Query:
@@ -41,6 +57,7 @@ class _Query:
         self._dsn = dsn
         self._op: Optional[str] = None  # "select" | "upsert" | "update" | "delete" | "fts"
         self._select_cols: str = "*"
+        self._want_count: bool = False
         self._upsert_row: Optional[dict] = None
         self._upsert_on_conflict: Optional[str] = None
         self._upsert_ignore_duplicates: bool = False
@@ -59,6 +76,8 @@ class _Query:
     def select(self, cols: str = "*", **kwargs):
         self._op = "select"
         self._select_cols = cols
+        # supabase-py: select(cols, count="exact") returns total row count alongside data
+        self._want_count = kwargs.get("count") is not None
         return self
 
     def upsert(self, row, *, on_conflict: Optional[str] = None, ignore_duplicates: bool = False, **kw):
@@ -66,6 +85,14 @@ class _Query:
         self._upsert_row = row
         self._upsert_on_conflict = on_conflict
         self._upsert_ignore_duplicates = ignore_duplicates
+        return self
+
+    def insert(self, row, **kw):
+        """Plain INSERT (no conflict handling). Returns inserted row."""
+        self._op = "upsert"
+        self._upsert_row = row
+        self._upsert_on_conflict = None
+        self._upsert_ignore_duplicates = False
         return self
 
     def update(self, data, **kw):
@@ -167,10 +194,11 @@ class _Query:
             cols, sql.Identifier(self._table), where, order, limit
         )
         cur.execute(query, params)
-        rows = cur.fetchall()
+        rows = [_serialise_row(r) for r in cur.fetchall()]
+        count = len(rows) if self._want_count else None
         if self._single:
-            return _APIResponse(data=rows[0] if rows else None)
-        return _APIResponse(data=rows)
+            return _APIResponse(data=rows[0] if rows else None, count=count)
+        return _APIResponse(data=rows, count=count)
 
     def _exec_upsert(self, cur) -> _APIResponse:
         row = self._upsert_row
@@ -205,7 +233,7 @@ class _Query:
             sql.Identifier(self._table), cols, placeholders, conflict_clause
         )
         cur.execute(query, params)
-        rows = cur.fetchall()
+        rows = [_serialise_row(r) for r in cur.fetchall()]
         return _APIResponse(data=rows)
 
     def _exec_update(self, cur) -> _APIResponse:
