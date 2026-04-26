@@ -26,7 +26,7 @@ _VIDEO_FORCED_PROVIDER = GEMINI
 # Model defaults (each overridable via env)
 _GEMINI_MODEL_PRIMARY = "gemini-3-flash-preview"
 _GEMINI_MODEL_FALLBACK = "gemini-3.1-pro-preview"
-_MINIMAX_MODEL = "minimax-m2.7"
+_MINIMAX_MODEL = "MiniMax-Text-01"
 _MINIMAX_STT_MODEL = "#g1_whisper-large"
 _MINIMAX_BASE_URL = "https://api.minimax.io/v1"
 

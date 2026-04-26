@@ -96,7 +96,10 @@ class MiniMaxProvider(Provider):
     ) -> str:
         content_parts: list[dict] = [{"type": "text", "text": prompt}]
         for fp in files:
-            if len(fp.data) <= _FILE_INLINE_LIMIT:
+            # MiniMax-Text-01 ignores inline text/plain file parts — embed as text instead
+            if fp.mime_type.startswith("text/"):
+                content_parts.append({"type": "text", "text": fp.data.decode(errors="replace")})
+            elif len(fp.data) <= _FILE_INLINE_LIMIT:
                 b64 = base64.b64encode(fp.data).decode()
                 content_parts.append({
                     "type": "file",
