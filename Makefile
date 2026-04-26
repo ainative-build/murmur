@@ -1,4 +1,4 @@
-.PHONY: help dev test release deploy
+.PHONY: help dev test test-unit test-integration test-all test-db-up test-db-down release deploy
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -6,8 +6,21 @@ help: ## Show this help
 dev: ## Run bot locally in polling mode
 	USE_POLLING=true uv run python bot.py
 
-test: ## Run all tests
-	uv run python -m pytest tests/ -v --tb=short
+test: test-unit ## Alias for test-unit (default test runner)
+
+test-unit: ## Run unit tests (no DB, fast)
+	uv run python -m pytest tests/ -m "not integration" --tb=short
+
+test-integration: ## Run integration tests (requires Postgres via test-db-up)
+	uv run python -m pytest tests/integration -m integration --tb=short --override-ini="addopts="
+
+test-all: test-unit test-integration ## Run unit + integration tests
+
+test-db-up: ## Bring up test Postgres + apply migrations
+	./scripts/test-db-up.sh
+
+test-db-down: ## Tear down test Postgres
+	./scripts/test-db-down.sh
 
 release: ## Create a release: bump version, tag, push → triggers deployment
 	@echo "Current version:"
