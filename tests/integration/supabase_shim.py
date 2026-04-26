@@ -63,9 +63,12 @@ class _Query:
         self._upsert_ignore_duplicates: bool = False
         self._update_data: Optional[dict] = None
         self._eq_filters: list[tuple[str, Any]] = []
+        self._neq_filters: list[tuple[str, Any]] = []
         self._in_filters: list[tuple[str, list]] = []
         self._gt_filters: list[tuple[str, Any]] = []
+        self._gte_filters: list[tuple[str, Any]] = []
         self._lt_filters: list[tuple[str, Any]] = []
+        self._lte_filters: list[tuple[str, Any]] = []
         self._order_by: Optional[tuple[str, bool]] = None
         self._limit: Optional[int] = None
         self._single: bool = False
@@ -116,6 +119,10 @@ class _Query:
         self._eq_filters.append((col, val))
         return self
 
+    def neq(self, col: str, val: Any):
+        self._neq_filters.append((col, val))
+        return self
+
     def in_(self, col: str, vals: list):
         self._in_filters.append((col, vals))
         return self
@@ -124,8 +131,16 @@ class _Query:
         self._gt_filters.append((col, val))
         return self
 
+    def gte(self, col: str, val: Any):
+        self._gte_filters.append((col, val))
+        return self
+
     def lt(self, col: str, val: Any):
         self._lt_filters.append((col, val))
+        return self
+
+    def lte(self, col: str, val: Any):
+        self._lte_filters.append((col, val))
         return self
 
     def order(self, col: str, desc: bool = False):
@@ -164,11 +179,20 @@ class _Query:
         for col, val in self._eq_filters:
             clauses.append(sql.SQL("{} = %s").format(sql.Identifier(col)))
             params.append(val)
+        for col, val in self._neq_filters:
+            clauses.append(sql.SQL("{} != %s").format(sql.Identifier(col)))
+            params.append(val)
         for col, val in self._gt_filters:
             clauses.append(sql.SQL("{} > %s").format(sql.Identifier(col)))
             params.append(val)
+        for col, val in self._gte_filters:
+            clauses.append(sql.SQL("{} >= %s").format(sql.Identifier(col)))
+            params.append(val)
         for col, val in self._lt_filters:
             clauses.append(sql.SQL("{} < %s").format(sql.Identifier(col)))
+            params.append(val)
+        for col, val in self._lte_filters:
+            clauses.append(sql.SQL("{} <= %s").format(sql.Identifier(col)))
             params.append(val)
         for col, vals in self._in_filters:
             placeholders = sql.SQL(",").join([sql.Placeholder()] * len(vals))
