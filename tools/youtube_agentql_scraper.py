@@ -68,7 +68,7 @@ def scrape_youtube(url: str, headless: bool = True) -> dict[str, str]:
         except Exception:
             # Fallback selector if AgentQL can’t find the button
             try:
-                page.locator("tp-yt-paper-button:has-text('more')").click(timeout=3000)
+                page.locator("tp-yt-paper-button:has-text('more')").first.click(timeout=3000)
             except PlaywrightTimeoutError:
                 pass
 

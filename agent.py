@@ -519,8 +519,35 @@ def get_youtube_content(state: AgentState) -> Dict[str, Any]:
             "needs_web_fallback": False,
         }
 
-    # Step 2: Fallback to AgentQL scraper (title + description)
-    console.print("No transcript — falling back to AgentQL scraper...", style="yellow")
+    # Step 2: yt-dlp metadata extraction (no download, works headlessly in Cloud Run)
+    console.print("No transcript — trying yt-dlp metadata...", style="yellow")
+    try:
+        import yt_dlp
+        ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        title = info.get("title", "") or ""
+        description = (info.get("description", "") or "")[:3000]
+        uploader = info.get("uploader", "") or ""
+        if title or description:
+            meta = f"Title: {title}"
+            if uploader:
+                meta += f"\nChannel: {uploader}"
+            if description:
+                meta += f"\n\nDescription:\n{description}"
+            console.print(f"yt-dlp metadata fetched for {video_id}", style="green")
+            return {
+                "content_type": content_type,
+                "content": meta.strip(),
+                "error": None,
+                "needs_web_fallback": False,
+            }
+        console.print("yt-dlp returned no title/description", style="yellow")
+    except Exception as e:
+        console.print(f"yt-dlp metadata failed: {e}", style="yellow")
+
+    # Step 3: AgentQL scraper fallback (browser-based, slower, may fail in containers)
+    console.print("Trying AgentQL scraper...", style="yellow")
     try:
         result = scrape_youtube_agentql(url, headless=True)
 
