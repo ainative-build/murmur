@@ -147,21 +147,27 @@ class RecordingBot(Bot):
         **kwargs: Any,
     ) -> Message:
         # Failure injection BEFORE recording: failed sends are not "deliveries".
+        # Note: PTB passes a `DEFAULT_NONE` sentinel for unset parse_mode, which is
+        # truthy. Distinguish by checking the actual value, not just truthiness.
         rec = self.recorder
+        parse_mode_str = str(parse_mode) if parse_mode is not None else None
+        is_html_attempt = parse_mode_str in ("HTML", "MarkdownV2", "Markdown")
         if rec.fail_all_replies:
             raise RuntimeError("RecordingBot: fail_all_replies enabled")
-        if rec.html_parse_fails and parse_mode:
+        if rec.html_parse_fails and is_html_attempt:
             raise RuntimeError("RecordingBot: html_parse_fails enabled (HTML attempt)")
         if rec.fail_after_n_replies is not None and self.reply_count >= rec.fail_after_n_replies:
             raise RuntimeError(
                 f"RecordingBot: fail_after_n_replies={rec.fail_after_n_replies} reached"
             )
 
+        # Normalise parse_mode to None for plain-text calls (DEFAULT_NONE → None) so
+        # tests can assert `r["parse_mode"] is None` for plain-text replies.
         rec.calls.append({
             "method": "send_message",
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": parse_mode,
+            "parse_mode": parse_mode_str if is_html_attempt else None,
             "kwargs": kwargs,
         })
         return self._make_message(chat_id, text)
