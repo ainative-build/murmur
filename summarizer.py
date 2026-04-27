@@ -30,8 +30,8 @@ MODEL_FLASH = "gemini-3-flash-preview"
 MODEL_PRO = "gemini-3.1-pro-preview"
 
 _USER_FACING_UNAVAILABLE = (
-    "Sorry, I couldn't generate a digest right now — Gemini is temporarily "
-    "overloaded. Please try again in a minute."
+    "Sorry, I couldn't generate a digest right now — the AI service is temporarily "
+    "unavailable. Please try again in a minute."
 )
 
 # Legacy singleton ref — test setups reset this via `summarizer._genai_client = None`
@@ -108,8 +108,8 @@ async def generate_topic_detail(
     except Exception as e:
         logger.error("Topic detail generation failed: %s", e)
         return (
-            "Sorry, I couldn't generate topic detail right now — Gemini is "
-            "temporarily overloaded. Please try again in a minute."
+            "Sorry, I couldn't generate topic detail right now — the AI service is "
+            "temporarily unavailable. Please try again in a minute."
         )
 
 
@@ -128,8 +128,8 @@ async def generate_decision_view(
     except Exception as e:
         logger.error("Decision view generation failed: %s", e)
         return (
-            "Sorry, I couldn't generate a decision view right now — Gemini is "
-            "temporarily overloaded. Please try again in a minute."
+            "Sorry, I couldn't generate a decision view right now — the AI service is "
+            "temporarily unavailable. Please try again in a minute."
         )
 
 
