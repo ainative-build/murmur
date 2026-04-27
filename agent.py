@@ -301,10 +301,24 @@ def get_twitter_content(state: AgentState) -> Dict[str, Any]:
                     except Exception:
                         pass
 
-                # If resolved URL is an X Article, it requires login — skip extraction
+                # If resolved URL is an X Article, try TinyFish on the article URL
                 if "/article/" in target_url or "/articles/" in target_url:
-                    console.print("Linked content is an X Article (requires login) — cannot extract", style="yellow")
-                    error_message = "Error: This tweet links to an X Article which requires login to view."
+                    console.print("Linked content is an X Article — trying TinyFish...", style="cyan")
+                    try:
+                        import asyncio
+                        from tools.tinyfish_fetcher import fetch_url_content
+                        tf_content = asyncio.get_event_loop().run_until_complete(fetch_url_content(target_url))
+                        if tf_content and len(tf_content) > 100:
+                            console.print(f"TinyFish extracted {len(tf_content)} chars from X Article", style="green")
+                            return {
+                                "content_type": content_type,
+                                "content": tf_content.strip(),
+                                "error": None,
+                                "needs_web_fallback": False,
+                            }
+                    except Exception as e:
+                        console.print(f"TinyFish failed for X Article: {e}", style="yellow")
+                    error_message = "Error: This tweet links to an X Article which requires login to view. TinyFish extraction also failed."
                     return {
                         "content_type": content_type,
                         "content": "",
