@@ -156,7 +156,7 @@ class GeminiProvider(Provider):
         """Summarize/answer questions about a video (URL string or raw bytes)."""
         client = get_gemini_client()
         video_part = (
-            genai_types.Part.from_uri(uri=video, mime_type="video/mp4")
+            genai_types.Part.from_uri(file_uri=video, mime_type="video/mp4")
             if isinstance(video, str)
             else genai_types.Part.from_bytes(data=video, mime_type="video/mp4")
         )
