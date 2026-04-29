@@ -125,6 +125,28 @@ async def llm_router(state: AgentState) -> Dict[str, Any]:
     }
 
 
+_ANTIBOT_SIGNALS = [
+    "just a moment",
+    "checking your browser",
+    "enable javascript and cookies to continue",
+    "security check",
+    "verify you are human",
+    "ddos protection",
+    "recaptcha",
+    "access denied",
+    "cloudflare ray id",
+    "this site is protected by",
+    "please complete the security check",
+    "bot detection",
+]
+
+
+def _is_antibot_page(content: str) -> bool:
+    """Return True if extracted content looks like an anti-bot / security-challenge page."""
+    lower = content.lower()
+    return any(signal in lower for signal in _ANTIBOT_SIGNALS)
+
+
 def get_web_content(state: AgentState) -> Dict[str, Any]:
     """Fetches content from a standard webpage URL using Tavily extract."""
     console.print("---GET WEB CONTENT (Tavily Extract)--- ", style="yellow bold")
@@ -172,6 +194,23 @@ def get_web_content(state: AgentState) -> Dict[str, Any]:
             # If extraction failed entirely and we have no content, set content_source empty
             if not content_source:
                 content_source = ""
+
+        # Anti-bot detection: Tavily returned content, but it's a security challenge page.
+        # TinyFish can bypass bot-protection — try it immediately.
+        if content_source and _is_antibot_page(content_source):
+            console.print("Anti-bot page detected — trying TinyFish for real content...", style="yellow")
+            try:
+                import asyncio
+                from tools.tinyfish_fetcher import fetch_url_content
+                tf_text = asyncio.get_event_loop().run_until_complete(fetch_url_content(url))
+                if tf_text and len(tf_text) > 100 and not _is_antibot_page(tf_text):
+                    content_source = f"URL: {url}\nRaw Content: {tf_text}\n"
+                    error_message = None
+                    console.print(f"TinyFish bypassed anti-bot: {len(tf_text)} chars from {url[:60]}", style="green")
+                else:
+                    console.print("TinyFish also blocked or returned no content", style="yellow")
+            except Exception as tf_err:
+                console.print(f"TinyFish anti-bot fallback error: {tf_err}", style="yellow")
 
         # If Tavily failed, try Playwright fallback (JS-rendered pages like Grok)
         if not content_source:
