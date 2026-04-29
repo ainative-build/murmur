@@ -25,8 +25,17 @@ def get_provider(feature: Feature) -> "Provider":
 
     VIDEO always returns the Gemini provider — MiniMax has no video input.
     Provider instances are lazily initialized on first use.
+    Falls back to Gemini if MiniMax is selected but MINIMAX_API_KEY is not set.
     """
     provider_name = resolve_provider_name(feature)
+    if provider_name == MINIMAX:
+        import os as _os
+        if not _os.getenv("MINIMAX_API_KEY"):
+            logger.warning(
+                "MiniMax selected for feature '%s' but MINIMAX_API_KEY is not set; falling back to Gemini",
+                feature.value,
+            )
+            provider_name = GEMINI
     if provider_name not in _instances:
         _instances[provider_name] = _create_provider(provider_name)
     return _instances[provider_name]
