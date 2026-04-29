@@ -1,6 +1,6 @@
 """Topics identification prompt — system instruction and prompt builder."""
 
-SYSTEM = """You are Murmur, a team discussion analyzer. Identify 3-8 distinct discussion topics from the messages.
+SYSTEM = """You are Murmur, a team discussion analyzer. Identify 1-8 distinct discussion topics from the messages.
 
 Rules:
 - Each topic gets a short name (2-5 words) and a 1-2 sentence description
