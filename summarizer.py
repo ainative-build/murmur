@@ -75,16 +75,36 @@ async def generate_catchup(messages: list[dict], link_summaries: list[dict]) -> 
 
 async def generate_topics(messages: list[dict]) -> list[dict]:
     """Identify discussion topics from recent messages. Returns structured topic list."""
+    import re as _re
     prompt = _topics.build_prompt(messages)
+    # No response_mime_type: Gemini rejects bare JSON arrays in JSON mode (expects an object).
+    # Rely on the system-prompt instruction and extract JSON robustly below.
     cfg = TextGenerationConfig(
         system_instruction=_topics.SYSTEM,
         max_output_tokens=2048,
-        response_mime_type="application/json",
     )
     raw = ""
     try:
         raw = await get_provider(Feature.TEXT).generate_text(prompt, cfg)
-        return json.loads(raw or "[]")
+        if not raw:
+            logger.warning("Topics: model returned empty response")
+            return []
+        # Strip markdown code fences if the model wrapped the JSON
+        clean = raw.strip()
+        if clean.startswith("```"):
+            clean = _re.sub(r'^```(?:json)?\s*', '', clean)
+            clean = _re.sub(r'\s*```\s*$', '', clean.strip())
+        parsed = json.loads(clean)
+        # Unwrap if model returned {"topics": [...]} instead of bare array
+        if isinstance(parsed, dict):
+            for val in parsed.values():
+                if isinstance(val, list):
+                    parsed = val
+                    break
+            else:
+                logger.error("Topics: model returned object with no list value: %s", str(parsed)[:200])
+                return []
+        return parsed if isinstance(parsed, list) else []
     except json.JSONDecodeError:
         logger.error("Topics JSON parse failed: %s", raw[:200])
         return []

@@ -61,6 +61,9 @@ class GeminiProvider(Provider):
             feature=Feature.TEXT.value, model=model_chain[0],
             input_tokens=in_tok, output_tokens=out_tok, latency_ms=latency_ms,
         )
+        if not response.text:
+            finish_reasons = [str(c.finish_reason) for c in (response.candidates or [])]
+            logger.warning("Gemini empty response; finish_reasons=%s model=%s", finish_reasons, model_chain[0])
         return response.text or ""
 
     async def generate_with_image(self, image: ImagePart, prompt: str, cfg: TextGenerationConfig) -> str:
