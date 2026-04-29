@@ -81,7 +81,7 @@ async def generate_topics(messages: list[dict]) -> list[dict]:
     # Rely on the system-prompt instruction and extract JSON robustly below.
     cfg = TextGenerationConfig(
         system_instruction=_topics.SYSTEM,
-        max_output_tokens=2048,
+        max_output_tokens=4096,
     )
     raw = ""
     try:
