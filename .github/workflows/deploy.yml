@@ -68,11 +68,11 @@ jobs:
             --min-instances=1 \
             --no-cpu-throttling \
             --cpu=1 \
+            --set-env-vars="GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_LOCATION=global,AI_PROVIDER=minimax,AI_PROVIDER_TEXT=minimax,AI_PROVIDER_IMAGE=minimax,AI_PROVIDER_FILE=minimax" \
             --set-secrets="\
               TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,\
               TELEGRAM_WEBHOOK_SECRET_TOKEN=TELEGRAM_WEBHOOK_SECRET_TOKEN:latest,\
               WEBHOOK_SECRET_PATH=WEBHOOK_SECRET_PATH:latest,\
-              GEMINI_API_KEY=GEMINI_API_KEY:latest,\
               MINIMAX_API_KEY=MINIMAX_API_KEY:latest,\
               DEEPSEEK_API_KEY=DEEPSEEK_API_KEY:latest,\
               TAVILY_API_KEY=TAVILY_API_KEY:latest,\

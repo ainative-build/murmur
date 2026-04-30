@@ -16,10 +16,11 @@ USE_POLLING: bool = os.getenv("USE_POLLING", "false").lower() == "true"
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
 
-# --- Google / Gemini ---
-GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+# --- Google / Gemini (Vertex AI only — no API key path) ---
+# Gemini is used only for VOICE/VIDEO (features MiniMax cannot handle) and
+# always routes through Vertex AI. Auth via Application Default Credentials.
 GOOGLE_CLOUD_PROJECT: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
-GOOGLE_CLOUD_LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+GOOGLE_CLOUD_LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
 
 # --- NotebookLM / Export ---
 NOTEBOOKLM_NOTEBOOK_ID: str = os.getenv("NOTEBOOKLM_NOTEBOOK_ID", "")

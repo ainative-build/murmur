@@ -3,9 +3,11 @@
 Resolution order (highest to lowest):
   1. AI_PROVIDER_<FEATURE>   e.g. AI_PROVIDER_TEXT=minimax
   2. AI_PROVIDER             global fallback
-  3. "gemini"                hard default
+  3. "minimax"               hard default — Gemini is reserved for VOICE/VIDEO
+                             which MiniMax cannot handle.
 
-VIDEO is always forced to "gemini" — MiniMax has no video input capability.
+VOICE and VIDEO are always forced to "gemini" (Vertex AI) — MiniMax has no
+audio transcription or video understanding capability.
 """
 from __future__ import annotations
 
@@ -20,8 +22,9 @@ GEMINI = "gemini"
 MINIMAX = "minimax"
 _VALID_PROVIDERS = {GEMINI, MINIMAX}
 
-# VIDEO hard-pinned regardless of env
-_VIDEO_FORCED_PROVIDER = GEMINI
+# VOICE and VIDEO hard-pinned to Gemini (Vertex AI) regardless of env —
+# MiniMax has no audio transcription or video understanding capability.
+_GEMINI_FORCED_FEATURES: set[Feature] = {Feature.VOICE, Feature.VIDEO}
 
 # Model defaults (each overridable via env)
 _GEMINI_MODEL_PRIMARY = "gemini-3-flash-preview"
@@ -33,10 +36,11 @@ _MINIMAX_BASE_URL = "https://api.minimax.io/v1"
 def resolve_provider_name(feature: Feature) -> str:
     """Return the provider name configured for the given feature.
 
-    VIDEO is always "gemini". Unknown names in env fall back to "gemini" with a warning.
+    VOICE and VIDEO are always "gemini" (Vertex AI). Unknown env values fall
+    back to "minimax" with a warning — MiniMax is the project default.
     """
-    if feature == Feature.VIDEO:
-        return _VIDEO_FORCED_PROVIDER
+    if feature in _GEMINI_FORCED_FEATURES:
+        return GEMINI
 
     # Per-feature override (highest precedence)
     per_feature = os.getenv(f"AI_PROVIDER_{feature.value.upper()}", "").strip().lower()
@@ -44,9 +48,9 @@ def resolve_provider_name(feature: Feature) -> str:
         if per_feature not in _VALID_PROVIDERS:
             logger.warning(
                 "Unknown provider '%s' for feature '%s', falling back to '%s'",
-                per_feature, feature.value, GEMINI,
+                per_feature, feature.value, MINIMAX,
             )
-            return GEMINI
+            return MINIMAX
         return per_feature
 
     # Global fallback
@@ -55,12 +59,12 @@ def resolve_provider_name(feature: Feature) -> str:
         if global_provider not in _VALID_PROVIDERS:
             logger.warning(
                 "Unknown AI_PROVIDER '%s', falling back to '%s'",
-                global_provider, GEMINI,
+                global_provider, MINIMAX,
             )
-            return GEMINI
+            return MINIMAX
         return global_provider
 
-    return GEMINI
+    return MINIMAX
 
 
 def get_gemini_models() -> tuple[str, str]:

@@ -11,11 +11,6 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import json
 
-# Mock google-genai before importing summarizer (transitive deps still need it)
-import sys
-sys.modules['google.genai'] = MagicMock()
-sys.modules['google.genai.types'] = MagicMock()
-
 import summarizer
 from src.providers import _reset_for_tests
 
@@ -45,25 +40,10 @@ class TestGetGenaiClient:
         import src.providers.gemini_client as gc
         gc._genai_client = None
 
-    def test_client_api_key_mode(self):
-        """Client initializes with API key when GEMINI_API_KEY is set."""
-        with patch('src.providers.gemini_client.config.IS_CLOUD_RUN', False), \
-             patch('src.providers.gemini_client.config.GEMINI_API_KEY', 'test_key'), \
-             patch('src.providers.gemini_client.genai.Client') as mock_cls:
-            mock_client = Mock()
-            mock_cls.return_value = mock_client
-
-            import src.providers.gemini_client as gc
-            gc._genai_client = None
-            client = summarizer.get_genai_client()
-            assert client == mock_client
-            mock_cls.assert_called_once_with(api_key='test_key')
-
     def test_client_vertex_ai_mode(self):
-        """Client initializes with Vertex AI when IS_CLOUD_RUN is True."""
-        with patch('src.providers.gemini_client.config.IS_CLOUD_RUN', True), \
-             patch('src.providers.gemini_client.config.GOOGLE_CLOUD_PROJECT', 'test-project'), \
-             patch('src.providers.gemini_client.config.GOOGLE_CLOUD_LOCATION', 'us-central1'), \
+        """Client initializes with Vertex AI when GOOGLE_CLOUD_PROJECT is set."""
+        with patch('src.providers.gemini_client.config.GOOGLE_CLOUD_PROJECT', 'test-project'), \
+             patch('src.providers.gemini_client.config.GOOGLE_CLOUD_LOCATION', 'global'), \
              patch('src.providers.gemini_client.genai.Client') as mock_cls:
             mock_client = Mock()
             mock_cls.return_value = mock_client
@@ -75,13 +55,13 @@ class TestGetGenaiClient:
             mock_cls.assert_called_once_with(
                 vertexai=True,
                 project='test-project',
-                location='us-central1',
+                location='global',
             )
 
     def test_client_singleton_reused(self):
         """Subsequent calls return same client instance."""
-        with patch('src.providers.gemini_client.config.IS_CLOUD_RUN', False), \
-             patch('src.providers.gemini_client.config.GEMINI_API_KEY', 'test_key'), \
+        with patch('src.providers.gemini_client.config.GOOGLE_CLOUD_PROJECT', 'test-project'), \
+             patch('src.providers.gemini_client.config.GOOGLE_CLOUD_LOCATION', 'global'), \
              patch('src.providers.gemini_client.genai.Client') as mock_cls:
             mock_client = Mock()
             mock_cls.return_value = mock_client
@@ -93,13 +73,12 @@ class TestGetGenaiClient:
             assert client1 is client2
             mock_cls.assert_called_once()
 
-    def test_raises_error_if_no_credentials(self):
-        """Raises RuntimeError if neither API key nor Vertex AI is configured."""
-        with patch('src.providers.gemini_client.config.IS_CLOUD_RUN', False), \
-             patch('src.providers.gemini_client.config.GEMINI_API_KEY', ''):
+    def test_raises_error_if_no_project(self):
+        """Raises RuntimeError if GOOGLE_CLOUD_PROJECT is not set."""
+        with patch('src.providers.gemini_client.config.GOOGLE_CLOUD_PROJECT', ''):
             import src.providers.gemini_client as gc
             gc._genai_client = None
-            with pytest.raises(RuntimeError, match="No Gemini credentials"):
+            with pytest.raises(RuntimeError, match="GOOGLE_CLOUD_PROJECT"):
                 summarizer.get_genai_client()
 
 

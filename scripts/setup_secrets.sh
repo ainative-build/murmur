@@ -4,7 +4,6 @@
 
 # Define the specific secrets used by this application
 SECRETS=(
-  "GEMINI_API_KEY"
   "DEEPSEEK_API_KEY"
   "TAVILY_API_KEY"
   "TWITTER_API_IO_KEY"

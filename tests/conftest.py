@@ -13,7 +13,8 @@ def setup_test_env():
     os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test_token_123")
     os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
     os.environ.setdefault("SUPABASE_KEY", "test_key_123")
-    os.environ.setdefault("GEMINI_API_KEY", "test_gemini_key")
+    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test-project")
+    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
     os.environ.setdefault("USE_POLLING", "false")
 
 

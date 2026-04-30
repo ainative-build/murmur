@@ -1,36 +1,24 @@
-// Gemini 3 clients with retry + fallback chain
-client<llm> Gemini3Flash {
-  provider google-ai
+// MiniMax client for routing/summarization (OpenAI-compatible API).
+// No Gemini API key — Gemini features go through Vertex AI in src/providers/.
+client<llm> MiniMaxText {
+  provider openai-generic
   retry_policy Exponential
   options {
-    model gemini-3-flash-preview
-    api_key env.GEMINI_API_KEY
+    model "MiniMax-Text-01"
+    base_url "https://api.minimax.io/v1"
+    api_key env.MINIMAX_API_KEY
+    // MiniMax rejects requests with only a system message (error 2013).
+    // Force the prompt to be sent as a user message.
+    default_role "user"
   }
 }
 
-client<llm> Gemini3FlashLite {
-  provider google-ai
-  retry_policy Exponential
-  options {
-    model gemini-3.1-flash-lite-preview
-    api_key env.GEMINI_API_KEY
-  }
-}
-
-client<llm> Gemini3Pro {
-  provider google-ai
-  retry_policy Exponential
-  options {
-    model gemini-3.1-pro-preview
-    api_key env.GEMINI_API_KEY
-  }
-}
-
-// Fallback: Flash → Flash-Lite (handles 503 overload gracefully)
+// Single-strategy fallback (kept for future expansion). BAML requires the
+// fallback wrapper to allow strategy changes without touching call sites.
 client<llm> LLMFallback {
   provider fallback
   options {
-    strategy [Gemini3Flash, Gemini3FlashLite]
+    strategy [MiniMaxText]
   }
 }
 

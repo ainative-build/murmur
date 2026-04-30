@@ -68,11 +68,6 @@ class TestConfigLoading:
             config = _reimport_config()
             assert config.SUPABASE_KEY == 'anon_key_123'
 
-    def test_gemini_api_key_loads(self):
-        with patch.dict(os.environ, {'GEMINI_API_KEY': 'gemini_key_123'}, clear=True):
-            config = _reimport_config()
-            assert config.GEMINI_API_KEY == 'gemini_key_123'
-
     def test_google_cloud_project_loads(self):
         with patch.dict(os.environ, {'GOOGLE_CLOUD_PROJECT': 'my-project'}, clear=True):
             config = _reimport_config()
@@ -81,7 +76,7 @@ class TestConfigLoading:
     def test_google_cloud_location_defaults(self):
         with patch.dict(os.environ, {}, clear=True):
             config = _reimport_config()
-            assert config.GOOGLE_CLOUD_LOCATION == 'us-central1'
+            assert config.GOOGLE_CLOUD_LOCATION == 'global'
 
     def test_google_cloud_location_loads_from_env(self):
         with patch.dict(os.environ, {'GOOGLE_CLOUD_LOCATION': 'europe-west1'}, clear=True):
@@ -168,5 +163,4 @@ class TestConfigDefaults:
             assert config.WEBHOOK_URL == ''
             assert config.SUPABASE_URL == ''
             assert config.SUPABASE_KEY == ''
-            assert config.GEMINI_API_KEY == ''
             assert config.GOOGLE_CLOUD_PROJECT == ''

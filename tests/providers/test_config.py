@@ -17,13 +17,14 @@ from src.providers.types import Feature
 class TestResolveProviderName:
     """Test env-driven provider resolution with precedence rules."""
 
-    def test_no_env_returns_gemini(self, monkeypatch):
-        """When no AI_PROVIDER env set, all features default to gemini."""
+    def test_no_env_returns_minimax(self, monkeypatch):
+        """When no AI_PROVIDER env set, TEXT/IMAGE/FILE default to minimax."""
         monkeypatch.delenv("AI_PROVIDER", raising=False)
         monkeypatch.delenv("AI_PROVIDER_TEXT", raising=False)
-        assert resolve_provider_name(Feature.TEXT) == GEMINI
-        assert resolve_provider_name(Feature.IMAGE) == GEMINI
-        assert resolve_provider_name(Feature.FILE) == GEMINI
+        assert resolve_provider_name(Feature.TEXT) == MINIMAX
+        assert resolve_provider_name(Feature.IMAGE) == MINIMAX
+        assert resolve_provider_name(Feature.FILE) == MINIMAX
+        # VOICE is hard-pinned to gemini regardless of env
         assert resolve_provider_name(Feature.VOICE) == GEMINI
 
     def test_video_always_gemini(self, monkeypatch):
@@ -31,13 +32,19 @@ class TestResolveProviderName:
         monkeypatch.setenv("AI_PROVIDER", MINIMAX)
         assert resolve_provider_name(Feature.VIDEO) == GEMINI
 
+    def test_voice_always_gemini(self, monkeypatch):
+        """VOICE feature is hard-pinned to Gemini — MiniMax has no STT."""
+        monkeypatch.setenv("AI_PROVIDER", MINIMAX)
+        monkeypatch.setenv("AI_PROVIDER_VOICE", MINIMAX)
+        assert resolve_provider_name(Feature.VOICE) == GEMINI
+
     def test_global_ai_provider_text(self, monkeypatch):
-        """AI_PROVIDER=minimax sets global provider to minimax (except VIDEO)."""
+        """AI_PROVIDER=minimax sets global provider to minimax (except VOICE/VIDEO)."""
         monkeypatch.setenv("AI_PROVIDER", MINIMAX)
         assert resolve_provider_name(Feature.TEXT) == MINIMAX
         assert resolve_provider_name(Feature.IMAGE) == MINIMAX
         assert resolve_provider_name(Feature.FILE) == MINIMAX
-        assert resolve_provider_name(Feature.VOICE) == MINIMAX
+        assert resolve_provider_name(Feature.VOICE) == GEMINI
         assert resolve_provider_name(Feature.VIDEO) == GEMINI
 
     def test_per_feature_override_beats_global(self, monkeypatch):
@@ -48,17 +55,17 @@ class TestResolveProviderName:
         assert resolve_provider_name(Feature.IMAGE) == MINIMAX
 
     def test_invalid_global_provider_fallback(self, monkeypatch, caplog):
-        """Invalid AI_PROVIDER falls back to gemini with warning."""
+        """Invalid AI_PROVIDER falls back to minimax with warning."""
         monkeypatch.setenv("AI_PROVIDER", "invalid_provider")
         result = resolve_provider_name(Feature.TEXT)
-        assert result == GEMINI
+        assert result == MINIMAX
         assert "Unknown AI_PROVIDER" in caplog.text
 
     def test_invalid_per_feature_provider_fallback(self, monkeypatch, caplog):
-        """Invalid AI_PROVIDER_TEXT falls back to gemini with warning."""
+        """Invalid AI_PROVIDER_TEXT falls back to minimax with warning."""
         monkeypatch.setenv("AI_PROVIDER_TEXT", "bad_provider")
         result = resolve_provider_name(Feature.TEXT)
-        assert result == GEMINI
+        assert result == MINIMAX
         assert "Unknown provider" in caplog.text
 
     def test_whitespace_and_case_normalization(self, monkeypatch):
