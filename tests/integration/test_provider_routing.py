@@ -27,13 +27,13 @@ class TestProviderRouting:
         provider = get_provider(Feature.TEXT)
         assert provider.name == MINIMAX
 
-    async def test_text_routes_to_gemini_by_default(self, monkeypatch):
-        """When AI_PROVIDER not set, TEXT routes to GeminiProvider."""
+    async def test_text_routes_to_minimax_by_default(self, monkeypatch):
+        """When AI_PROVIDER not set, TEXT routes to MiniMaxProvider (project default)."""
         monkeypatch.delenv("AI_PROVIDER", raising=False)
-        monkeypatch.setenv("GEMINI_API_KEY", "test_key")
+        monkeypatch.setenv("MINIMAX_API_KEY", "fake_key")
 
         provider = get_provider(Feature.TEXT)
-        assert provider.name == GEMINI
+        assert provider.name == MINIMAX
 
     async def test_per_feature_override_routing(self, monkeypatch):
         """AI_PROVIDER_TEXT=gemini overrides global AI_PROVIDER=minimax."""
@@ -95,9 +95,8 @@ class TestProviderRouting:
             assert result == "minimax response"
 
     async def test_text_generation_gemini_provider(self, monkeypatch):
-        """generate_text routes through Gemini by default."""
-        monkeypatch.delenv("AI_PROVIDER", raising=False)
-        monkeypatch.setenv("GEMINI_API_KEY", "test_key")
+        """generate_text routes through Gemini when explicitly opted-in."""
+        monkeypatch.setenv("AI_PROVIDER", GEMINI)
 
         provider = get_provider(Feature.TEXT)
 
@@ -123,17 +122,17 @@ class TestProviderRouting:
 
     async def test_reset_creates_new_instance(self, monkeypatch):
         """After _reset_for_tests, get_provider returns a new instance."""
-        monkeypatch.setenv("GEMINI_API_KEY", "test_key")
+        monkeypatch.setenv("MINIMAX_API_KEY", "fake_key")
 
         provider1 = get_provider(Feature.TEXT)
         _reset_for_tests()
         provider2 = get_provider(Feature.TEXT)
 
         assert provider1 is not provider2
-        assert provider1.name == provider2.name == GEMINI
+        assert provider1.name == provider2.name == MINIMAX
 
     async def test_multiple_features_same_provider(self, monkeypatch):
-        """Multiple features can use the same provider instance."""
+        """TEXT/IMAGE/FILE share the MiniMax singleton; VOICE is forced to Gemini."""
         monkeypatch.setenv("AI_PROVIDER", MINIMAX)
         monkeypatch.setenv("MINIMAX_API_KEY", "fake_key")
 
@@ -142,8 +141,10 @@ class TestProviderRouting:
         file = get_provider(Feature.FILE)
         voice = get_provider(Feature.VOICE)
 
-        # All should be the same minimax instance
-        assert text is image is file is voice
+        # TEXT/IMAGE/FILE share one MiniMax instance; VOICE is hard-pinned to Gemini.
+        assert text is image is file
+        assert voice.name == GEMINI
+        assert voice is not text
 
 
 # Import for MagicMock reference
