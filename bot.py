@@ -401,7 +401,14 @@ async def _process_links_and_store(
                 return
             # TinyFish fallback — try extracting content directly
             from tools.tinyfish_fetcher import fetch_url_content
+            from agent import _is_antibot_page
             tf_content = await fetch_url_content(url)
+            # Reject anti-bot / no-JS landing pages (e.g. x.com without login)
+            # so we don't end up summarizing site chrome instead of real content.
+            if tf_content and _is_antibot_page(tf_content):
+                logger.warning(f"TinyFish returned anti-bot/no-JS page for {url[:60]} — failing cleanly")
+                await message.reply_text("⚠️ Couldn't extract content from this link.")
+                return
             if tf_content and len(tf_content) > 100:
                 try:
                     from baml_client import b as baml_b

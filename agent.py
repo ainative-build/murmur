@@ -138,6 +138,10 @@ _ANTIBOT_SIGNALS = [
     "this site is protected by",
     "please complete the security check",
     "bot detection",
+    # X.com / Twitter no-JS landing page (login wall when scraped without JS).
+    "javascript is not available",
+    "javascript is disabled in this browser",
+    "we've detected that javascript is disabled",
 ]
 
 
