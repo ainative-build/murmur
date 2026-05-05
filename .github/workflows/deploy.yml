@@ -68,7 +68,7 @@ jobs:
             --min-instances=1 \
             --no-cpu-throttling \
             --cpu=1 \
-            --set-env-vars="GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_LOCATION=global,AI_PROVIDER=minimax,AI_PROVIDER_TEXT=minimax,AI_PROVIDER_IMAGE=minimax,AI_PROVIDER_FILE=minimax" \
+            --set-env-vars="GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},GOOGLE_CLOUD_LOCATION=global,AI_PROVIDER=minimax,AI_PROVIDER_TEXT=minimax,AI_PROVIDER_IMAGE=minimax,AI_PROVIDER_FILE=minimax,MINIMAX_BASE_URL=https://api.minimax.io/v1,MINIMAX_MODEL=MiniMax-Text-01" \
             --set-secrets="\
               TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,\
               TELEGRAM_WEBHOOK_SECRET_TOKEN=TELEGRAM_WEBHOOK_SECRET_TOKEN:latest,\
@@ -78,6 +78,7 @@ jobs:
               TAVILY_API_KEY=TAVILY_API_KEY:latest,\
               AGENTQL_API_KEY=AGENTQL_API_KEY:latest,\
               TWITTER_API_IO_KEY=TWITTER_API_IO_KEY:latest,\
+              TINYFISH_API_KEY=TINYFISH_API_KEY:latest,\
               SUPABASE_URL=SUPABASE_URL:latest,\
               SUPABASE_KEY=SUPABASE_KEY:latest"
 
